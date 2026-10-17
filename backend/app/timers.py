@@ -20,7 +20,8 @@ from .states import Event
 
 log = logging.getLogger("stillhere.timers")
 
-MAX_ATTEMPTS = 5
+MAX_ATTEMPTS = 5  # after this many errors in a row a timer is retried every RETRY_CAP_S, never dropped
+RETRY_CAP_S = 30
 BATCH = 20
 
 
@@ -30,7 +31,7 @@ async def fire_one(conn, ctx: Ctx, session_id=None) -> Optional[int]:
     try:
         async with conn.transaction():
             claimed = await (await conn.execute(
-                """SELECT t.id, t.session_id, t.kind, t.expected_version, s.version AS session_version
+                """SELECT t.id, t.session_id, t.kind, t.expected_version, t.attempts, s.version AS session_version
                      FROM timers t JOIN sessions s ON s.id = t.session_id
                     WHERE t.fired_at IS NULL AND t.cancelled_at IS NULL AND t.fire_at <= now()
                       AND (%(sid)s::uuid IS NULL OR t.session_id = %(sid)s::uuid)
@@ -51,17 +52,18 @@ async def fire_one(conn, ctx: Ctx, session_id=None) -> Optional[int]:
     except Exception as exc:  # the transaction above is rolled back
         if claimed is None:
             raise
-        log.exception("timer %s (%s) failed", claimed["id"], claimed["kind"])
+        log.exception("timer %s (%s) failed (attempt %s)", claimed["id"], claimed["kind"], claimed["attempts"] + 1)
         async with conn.transaction():
+            # A deadline is never dropped: it is retried (backoff capped at RETRY_CAP_S) until it fires,
+            # and the operator sees it in /v1/health (failing_timers) and /v1/admin/timers. Only a timer
+            # still pending is touched: another worker may have fired it since this one let go of it.
             await conn.execute(
                 """UPDATE timers
                       SET attempts = attempts + 1,
                           last_error = left(%s, 500),
-                          fire_at = now() + make_interval(secs => least(30, 2 ^ (attempts + 1))),
-                          fired_at = CASE WHEN attempts + 1 >= %s THEN now() ELSE NULL END,
-                          result = CASE WHEN attempts + 1 >= %s THEN 'error' ELSE NULL END
-                    WHERE id = %s""",
-                (repr(exc), MAX_ATTEMPTS, MAX_ATTEMPTS, claimed["id"]))
+                          fire_at = now() + make_interval(secs => least(%s, 2 ^ least(attempts + 1, 10)))
+                    WHERE id = %s AND fired_at IS NULL AND cancelled_at IS NULL""",
+                (repr(exc), RETRY_CAP_S, claimed["id"]))
         return claimed["id"]
 
 

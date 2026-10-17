@@ -93,7 +93,10 @@ async def test_the_sender_never_sends_to_a_removed_contact(client, db, ctx):
         calls.append(request)
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        await Sender(db, ctx, TelegramAPI("123:TEST", http)).run_once()
+        sender = Sender(db, ctx, TelegramAPI("123:TEST", http))
+        for _ in range(10):
+            if await sender.run_once() == 0:
+                break
     assert calls == []
     assert {r["status"] for r in await outbox(db, w.session_id, contact_id=c1["id"])} == {"failed"}
 

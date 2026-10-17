@@ -1,7 +1,8 @@
 """Outbox sender: at-least-once delivery with a dedupe key.
 
 Rows are claimed with UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)
-and a 30 s lease (locked_until); a reaper returns stale 'sending' rows to
+and a 30 s lease (locked_until), in queue order per recipient (a row waits for every earlier
+unsent row to the same recipient); a reaper returns stale 'sending' rows to
 'pending', and a starting sender at once returns rows an earlier (killed)
 sender had claimed (claimed_by). Network errors, timeouts and 5xx are retried until the outage ends
 (backoff capped at 60 s); only a permanent 4xx rejection ends as 'failed'. A crash between the provider accepting a message and the row being
@@ -78,15 +79,25 @@ async def reclaim_orphans(db, token: str) -> int:
 
 
 async def claim(db, limit: int = 10, token: Optional[str] = None) -> list[dict]:
+    """Due rows, oldest first, at most one per recipient: a recipient's next row waits until every
+    earlier one is sent or has failed, so a retried alert never lands after the false alarm that
+    closed it."""
     async with db.connection() as conn:
         cur = await conn.execute(
             """UPDATE outbox SET status = 'sending', locked_until = now() + make_interval(secs => %s),
                       attempts = attempts + 1, claimed_by = %s
-                WHERE id IN (SELECT id FROM outbox
-                              WHERE status = 'pending' AND next_attempt_at <= now()
-                              ORDER BY next_attempt_at, id
+                WHERE id IN (SELECT o.id FROM outbox o
+                              WHERE o.status = 'pending' AND o.next_attempt_at <= now()
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM outbox e
+                                     WHERE e.id < o.id AND e.status IN ('pending', 'sending')
+                                       AND e.recipient = o.recipient
+                                       AND CASE o.recipient WHEN 'contact' THEN e.contact_id = o.contact_id
+                                                            WHEN 'wearer' THEN e.user_id = o.user_id
+                                                            ELSE e.chat_id = o.chat_id END)
+                              ORDER BY o.next_attempt_at, o.id
                               LIMIT %s
-                              FOR UPDATE SKIP LOCKED)
+                              FOR UPDATE OF o SKIP LOCKED)
             RETURNING *""", (LEASE_S, token, limit))
         rows = list(await cur.fetchall())
     rows.sort(key=lambda r: r["id"])

@@ -218,6 +218,7 @@ class Event:
     late: bool = False  # SQUEEZE delivered after a gap
     simulated: bool = False  # PULL_FORWARD from simulated input (badged)
     twin: bool = False  # CONTACT_*: on the twin's alert (a contact kept out of duress alerts)
+    stale: bool = False  # SQUEEZE: held back (buffered) and made before the prompt now showing
 
 
 # --- outputs ----------------------------------------------------------------
@@ -568,6 +569,12 @@ def _on_squeeze(snap: Snapshot, ev: Event, d: Decision, choose: Chooser) -> None
     s = snap.state
     if pattern == "duress":
         _duress_squeeze(snap, ev, d)
+        return
+    if s in PROMPT_STATES and ev.stale:
+        # Held back by the bridge and made before this prompt existed: it answers nothing (and
+        # costs her no retry). A duress squeeze is never stale: it always counts.
+        d.audit.append(AuditEntry("stale_squeeze", {"via": "device", "pattern": pattern}))
+        d.reply = "ignored"
         return
     if s in PROMPT_STATES:
         if pattern == "plain" and ev.k is not None and ev.k == snap.challenge_n:

@@ -31,10 +31,14 @@ async def health(request: Request):
             row = await (await conn.execute(
                 """SELECT now() AS now,
                           (SELECT count(*) FROM timers WHERE fired_at IS NULL AND cancelled_at IS NULL) AS pending_timers,
+                          (SELECT count(*) FROM timers WHERE fired_at IS NULL AND cancelled_at IS NULL
+                                                         AND attempts > 0) AS failing_timers,
                           (SELECT count(*) FROM outbox WHERE status IN ('pending', 'sending')) AS pending_outbox""")).fetchone()
     except Exception as exc:  # pool timeout or connection error
         return JSONResponse({"ok": False, "db": "down", "error": type(exc).__name__, **info}, status_code=503)
     out = {"ok": True, "db": "up", "server_time": row["now"].isoformat(), **info}
     if operator:
-        out.update(pending_timers=row["pending_timers"], pending_outbox=row["pending_outbox"])
+        # failing_timers: deadlines that raised an error and are being retried (see the server log).
+        out.update(pending_timers=row["pending_timers"], pending_outbox=row["pending_outbox"],
+                   failing_timers=row["failing_timers"])
     return out

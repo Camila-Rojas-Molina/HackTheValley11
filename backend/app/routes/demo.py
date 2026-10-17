@@ -104,7 +104,7 @@ async def admin_timers(request: Request, recent: int = Query(default=0, ge=0, le
     require_admin(request)
     async with get_db(request).connection() as conn:
         rows = await (await conn.execute(
-            """SELECT id, session_id, kind, fire_at, expected_version,
+            """SELECT id, session_id, kind, fire_at, expected_version, attempts, last_error,
                       extract(epoch FROM fire_at - now()) AS in_s
                  FROM timers WHERE fired_at IS NULL AND cancelled_at IS NULL ORDER BY fire_at""")).fetchall()
         fired = []
@@ -116,7 +116,9 @@ async def admin_timers(request: Request, recent: int = Query(default=0, ge=0, le
                 (recent,))).fetchall()
     out = {"timers": [{"id": r["id"], "session_id": str(r["session_id"]), "kind": r["kind"],
                        "fire_at": r["fire_at"].isoformat(), "in_s": round(float(r["in_s"]), 1),
-                       "expected_version": r["expected_version"]} for r in rows]}
+                       "expected_version": r["expected_version"],
+                       # A timer whose transition raised is retried (never dropped): attempts > 0.
+                       "attempts": r["attempts"], "last_error": r["last_error"]} for r in rows]}
     if recent:
         out["recent_fired"] = [{"id": r["id"], "session_id": str(r["session_id"]), "kind": r["kind"],
                                 "fire_at": r["fire_at"].isoformat(), "fired_at": r["fired_at"].isoformat(),

@@ -29,6 +29,8 @@ DEMO_DEVICE_ID, WEARER_KEY, DEMO_PIN, DEMO_DURESS_PIN. backend/.env is read if p
 Prints PASS/FAIL per step and exits 1 if any failed. It changes the demo wearer's session, heart-rate
 baseline and contacts, so it refuses to run while the demo wearer has approved contacts it did not create
 (they would get real alerts): run it against its own database, e.g. a second server on another port.
+It also refuses a server with a Telegram bot token (exit 2): a second server on the same bot would run a
+second poller and take contacts' taps away from the real one. Start that server with TELEGRAM_BOT_TOKEN=.
 """
 from __future__ import annotations
 
@@ -656,6 +658,12 @@ def main(argv: Optional[list] = None) -> int:
         return 2
     print(f"StillHere at {args.url}: db {health.get('db')}, telegram {health.get('telegram')}, "
           f"emergency services {health.get('emergency_services')}", flush=True)
+    if health.get("telegram") == "configured":
+        # A second server on the team's bot token starts a second getUpdates poller (the advisory lock
+        # is per database), which takes contacts' button taps away from the real server.
+        print("refusing to run: this server has a Telegram bot token. Start the simulate server with an empty one, "
+              "e.g. TELEGRAM_BOT_TOKEN= PORT=8001 DATABASE_URL=... backend/scripts/serve.sh", file=sys.stderr)
+        return 2
     srv.ok(srv.wearer("GET", "/v1/contacts"), "wearer key check")  # validates WEARER_KEY early
     dev = FakeDevice(args.url, os.environ.get("DEMO_DEVICE_ID") or "scrunchie-1", env["DEVICE_KEY"])
     run = Run(srv, dev, env["DEMO_PIN"], env["DEMO_DURESS_PIN"], os.environ.get("DEMO_WEARER_NAME") or "Maya")

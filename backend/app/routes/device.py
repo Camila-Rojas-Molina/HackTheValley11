@@ -185,7 +185,7 @@ async def _process(conn, ctx, dev: dict, body: EventIn) -> dict:
     p = body.payload or {}
     reply = "ignored"
     if body.type == "squeeze":
-        sess = await (await conn.execute("SELECT link_state FROM sessions WHERE id = %s FOR UPDATE",
+        sess = await (await conn.execute("SELECT link_state, challenge_id FROM sessions WHERE id = %s FOR UPDATE",
                                          (sid,))).fetchone()
         pattern = p.get("pattern") or "plain"
         if pattern not in states.SQUEEZE_PATTERNS:
@@ -194,8 +194,13 @@ async def _process(conn, ctx, dev: dict, body: EventIn) -> dict:
             k = int(p["k"]) if p.get("k") is not None else None
         except (TypeError, ValueError):
             k = None
-        late = bool(p.get("buffered")) or sess["link_state"] == states.LINK_LOST
-        applied = await engine.apply(conn, sid, states.Event(states.SQUEEZE, pattern=pattern, k=k, late=late),
+        buffered = bool(p.get("buffered"))
+        late = buffered or sess["link_state"] == states.LINK_LOST
+        # A held-back squeeze answers only the prompt it was made for (the bridge stamps the
+        # challenge_id the device showed): one made before this prompt was issued answers nothing.
+        stale = buffered and (p.get("challenge_id") or None) != sess["challenge_id"]
+        applied = await engine.apply(conn, sid, states.Event(states.SQUEEZE, pattern=pattern, k=k, late=late,
+                                                             stale=stale),
                                      actor=actor, event_key=key, ctx=ctx)
         if applied.public_state == states.ENDED:
             # Masked session that "ended" with the duress PIN: answer like a real ended session.

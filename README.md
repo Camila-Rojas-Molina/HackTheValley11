@@ -57,7 +57,7 @@ own wording. Rules enforced in code and covered by tests:
 - Real-PIN and duress-PIN replies are byte-identical (HTTP body, device command, wearer message); duress is masked as `ARMED`.
 - Contacts must be approved by the wearer and see nothing before an alert.
 - FINAL shows "Emergency services: SIMULATED" and never calls anyone.
-- Timers are database rows, so a `kill -9` mid-countdown still fires on time after restart. The outbox is at-least-once with a dedupe key.
+- Timers are database rows, so a `kill -9` mid-countdown still fires on time after restart, and a timer whose transition errors is retried until it fires. The outbox is at-least-once with a dedupe key and keeps each recipient's messages in order.
 
 Heart rate is pluggable: `POST /v1/hr` takes samples from any source (HeartCast through `/hr-bridge`, a
 streaming service, an Apple Health Shortcut, the simulator).
@@ -146,11 +146,13 @@ Runs the seven KAZE scenarios over HTTP with a fake device and fake web contacts
 then the PointClickCare seed (`pcc`): it seeds the synthetic cohort and checks `/v1/care/alerts` lists every
 scripted change. It prints PASS/FAIL per step and exits 1 on any failure (about 4 minutes in demo timing). It changes the
 demo wearer's session and contacts and refuses to run while the demo wearer has approved contacts it did not
-create, so give it its own server and database:
+create, so give it its own server and database. Start that server with an empty `TELEGRAM_BOT_TOKEN`: on the
+team's bot it would run a second poller and take contacts' button taps away from the real server
+(`simulate.py` refuses to run against a server that has a bot token):
 
 ```bash
 # Second database "stillhere_sim" (same pgserver snippet as above, another name), then:
-PORT=8001 DATABASE_URL='<stillhere_sim URL>' backend/scripts/serve.sh &
+TELEGRAM_BOT_TOKEN= PORT=8001 DATABASE_URL='<stillhere_sim URL>' backend/scripts/serve.sh &
 STILLHERE_URL=http://127.0.0.1:8001 .venv/bin/python backend/scripts/simulate.py          # all seven + pcc
 STILLHERE_URL=http://127.0.0.1:8001 .venv/bin/python backend/scripts/simulate.py 2 5 pcc  # a subset
 ```

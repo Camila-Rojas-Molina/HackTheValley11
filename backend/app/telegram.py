@@ -5,7 +5,10 @@
   lock session has idle_session_timeout set, so a poller whose client vanished
   without closing it loses the lock after POLLER_LOCK_IDLE_S.
 * getUpdates(timeout=25, allowed_updates=[message, callback_query]); the offset
-  is stored in bot_state in the same transaction that processes the update.
+  is stored in bot_state, per bot, in the same transaction that processes the update, and each
+  update is processed once per bot (tg_updates). The offset follows the update ids Telegram sends,
+  lower ones too: a new bot token, or Telegram restarting its ids after a week without updates,
+  starts below the old offset, and those updates must not be dropped.
 * /start <token>: binds a contact invite (pending until the wearer approves)
   or the wearer's own chat (for "Reminder" nudges the Apple Watch mirrors).
 * Inline buttons: ack / pass / safe / cant -> CONTACT_* events, only from the contact's own chat and
@@ -15,6 +18,7 @@ With no TELEGRAM_BOT_TOKEN the poller does nothing and the outbox logs instead.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import secrets
 from typing import Optional
@@ -43,15 +47,29 @@ ACTIONS = {
 }
 
 
-async def get_offset(conn) -> int:
-    row = await (await conn.execute("SELECT value FROM bot_state WHERE key = %s", (OFFSET_KEY,))).fetchone()
+TG_UPDATES_KEEP_H = 48  # Telegram keeps an unconfirmed update for at most 24 h
+
+
+def bot_key(ctx: Optional[Ctx]) -> str:
+    """Which bot an offset and an update id belong to: a hash of its token (never the token itself)."""
+    token = ctx.settings.telegram_bot_token if ctx is not None else None
+    return hashlib.sha256(token.encode()).hexdigest()[:16] if token else "none"
+
+
+def _offset_key(ctx: Optional[Ctx]) -> str:
+    bot = bot_key(ctx)
+    return OFFSET_KEY if bot == "none" else f"{OFFSET_KEY}:{bot}"
+
+
+async def get_offset(conn, ctx: Optional[Ctx] = None) -> int:
+    row = await (await conn.execute("SELECT value FROM bot_state WHERE key = %s", (_offset_key(ctx),))).fetchone()
     return int(row["value"]["offset"]) if row else 0
 
 
-async def _set_offset(conn, offset: int) -> None:
+async def _set_offset(conn, offset: int, ctx: Optional[Ctx] = None) -> None:
     await conn.execute(
         """INSERT INTO bot_state (key, value, updated_at) VALUES (%s, jsonb_build_object('offset', %s::bigint), now())
-           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()""", (OFFSET_KEY, offset))
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()""", (_offset_key(ctx), offset))
 
 
 async def _say(conn, chat_id: int, template: str, params: dict, key: str) -> None:
@@ -64,12 +82,21 @@ async def _say(conn, chat_id: int, template: str, params: dict, key: str) -> Non
 async def handle_update(db, ctx: Ctx, update: dict) -> Optional[dict]:
     """Process one update exactly once. Returns an answerCallbackQuery payload, if any."""
     uid = int(update["update_id"])
+    bot = bot_key(ctx)
     answer: Optional[dict] = None
     async with db.connection() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(%s)", (POLLER_LOCK_ID + 1,))
-            if uid < await get_offset(conn):
-                return None  # already processed
+            fresh = await (await conn.execute(
+                """INSERT INTO tg_updates (bot, update_id) VALUES (%s, %s) ON CONFLICT DO NOTHING
+                   RETURNING update_id""", (bot, uid))).fetchone()
+            # The offset follows Telegram's ids (lower ones too), so getUpdates confirms this update.
+            await _set_offset(conn, uid + 1, ctx)
+            if fresh is None:
+                return None  # already processed (a redelivery)
+            if uid % 50 == 0:
+                await conn.execute("DELETE FROM tg_updates WHERE processed_at < now() - make_interval(hours => %s)",
+                                   (TG_UPDATES_KEEP_H,))
             try:
                 async with conn.transaction():  # savepoint: a bad update must not block the queue
                     if "callback_query" in update:
@@ -83,7 +110,6 @@ async def handle_update(db, ctx: Ctx, update: dict) -> Optional[dict]:
             except Exception:
                 log.exception("telegram update %s failed; skipping it", uid)
                 answer = None
-            await _set_offset(conn, uid + 1)
     return answer
 
 
@@ -95,7 +121,7 @@ async def _handle_message(conn, ctx: Ctx, update: dict) -> None:
         return
     parts = text.split(maxsplit=1)
     token = parts[1].strip() if len(parts) > 1 else ""
-    key = f"tg:{update['update_id']}"
+    key = f"tg:{bot_key(ctx)}:{update['update_id']}"
     if not token:
         return
     if (msg["chat"].get("type") or "private") != "private":
@@ -163,15 +189,14 @@ async def _handle_callback(conn, ctx: Ctx, update: dict) -> dict:
     await conn.execute("SELECT 1 FROM sessions WHERE id = %s FOR UPDATE", (alert["session_id"],))
     ins = await (await conn.execute(
         """INSERT INTO acks (alert_id, contact_id, action, source, telegram_update_id)
-           VALUES (%s, %s, %s, 'telegram', %s) ON CONFLICT (telegram_update_id) DO NOTHING RETURNING id""",
+           VALUES (%s, %s, %s, 'telegram', %s) RETURNING id""",
         (alert_id, contact_id, ack_action, update["update_id"]))).fetchone()
-    if ins is None:
-        return answer
     message = cq.get("message") or {}
     edit = {"message_id": message.get("message_id"), "prefix": message.get("text")}
     applied = await engine.apply(conn, alert["session_id"],
                                  states.Event(event_kind, contact_id=contact_id, twin=bool(alert["cover"])),
-                                 actor=f"contact:{contact_id}", event_key=f"tg:{update['update_id']}", ctx=ctx,
+                                 actor=f"contact:{contact_id}", event_key=f"tg:{bot_key(ctx)}:{update['update_id']}",
+                                 ctx=ctx,
                                  edit=edit)
     await conn.execute("UPDATE acks SET result = %s WHERE id = %s", (applied.decision.reply, ins["id"]))
     answer["text"] = messages.CALLBACK_ANSWERS.get(applied.decision.reply, messages.CALLBACK_ANSWERS["ignored"])
@@ -214,7 +239,7 @@ async def telegram_poller(db, ctx: Ctx, stop: asyncio.Event, client: Optional[ht
                 while not stop.is_set():
                     await lock_conn.execute("SELECT 1")  # the lock session is alive (and not idle)
                     async with db.connection() as conn:
-                        offset = await get_offset(conn)
+                        offset = await get_offset(conn, ctx)
                     res = await api.call("getUpdates", {"offset": offset, "timeout": 25,
                                                         "allowed_updates": ["message", "callback_query"]},
                                          timeout=35)

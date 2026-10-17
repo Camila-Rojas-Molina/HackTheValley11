@@ -190,3 +190,39 @@ def test_a_dropped_noisy_line_never_holds_up_the_next_event(setup):
     b.handle_line('E,b\x007:1,squeeze,{"pattern":"plain","k":2}')
     b.handle_line('E,b7:2,squeeze,{"pattern":"plain","k":2}')
     assert [c[2]["event_id"] for c in srv.paths("/events")] == ["b7:2"] and b.events == []
+
+
+def test_a_squeeze_carries_the_challenge_the_device_showed_when_she_made_it():
+    """A squeeze held back while the server is down must not answer a prompt issued meanwhile: the
+    bridge stamps it with the prompt the device was showing (none here), and the server only lets a
+    held-back squeeze answer the prompt it was stamped with."""
+    state = {"up": True, "cmd": {"led": "off", "blink_n": 0, "challenge_id": None}}
+    sent = []
+
+    def handler(request):
+        if not state["up"]:
+            raise httpx.ConnectError("down", request=request)
+        body = json.loads(request.content or b"{}")
+        if request.url.path.endswith("/events"):
+            sent.append(body)
+            return httpx.Response(200, json={"ok": True, "result": "ignored", "state_public": "PROMPTED",
+                                             "cmd": state["cmd"]})
+        return httpx.Response(200, json={"state_public": "x", "server_time": "t", "cmd": state["cmd"]})
+
+    clock, out = Clock(), []
+    http = httpx.Client(base_url="http://bridge.test", transport=httpx.MockTransport(handler))
+    b = br.Bridge(http=http, device_id="d", device_key="k", write_line=out.append, clock=clock)
+    b.handle_line("H,b7,1,5,0,0,0")
+    b.tick()                                                  # the device shows no prompt
+    state["up"] = False
+    b.handle_line('E,b7:20,squeeze,{"pattern":"plain","k":2}')
+    state.update(up=True, cmd={"led": "amber", "blink_n": 0, "challenge_id": "new123"})   # a prompt meanwhile
+    clock.t += 1.0
+    b.handle_line("H,b7,2,5,0,0,0")
+    b.tick()
+    assert out[-1] == "C,amber,0,new123" and sent and sent[0]["payload"]["buffered"] is True
+    assert "challenge_id" not in sent[0]["payload"]           # made before any prompt: none
+    # A live squeeze now carries the prompt the device is showing.
+    b.handle_line('E,b7:21,squeeze,{"pattern":"plain","k":2}')
+    assert sent[-1]["payload"] == {"pattern": "plain", "k": 2, "challenge_id": "new123"}
+    http.close()

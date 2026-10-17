@@ -103,6 +103,10 @@ Bridge behaviour:
   with the same id.
 - **Server down:** events wait in memory and are flushed duress first, then oldest first, marked
   `"buffered": true`. A buffered squeeze counts as late, and a late squeeze never stands an alert down.
+- **Challenge stamp:** a squeeze carries the `challenge_id` of the prompt the device was showing when it
+  arrived (none when no prompt was showing). A buffered squeeze answers a prompt only if it carries that
+  prompt's `challenge_id`: one made before the prompt was issued answers nothing (`result: "ignored"`, a
+  `stale_squeeze` timeline entry, no retry used). A live squeeze answers as before.
 - **Replug:** the serial port is reopened automatically.
 - `--stdin` reads the same lines from stdin, with no hardware and no pyserial.
 
@@ -138,7 +142,7 @@ heartbeat after a `LOST_CONTACT` restores the link and tells the contacts who we
 
 | `type` | `payload` | Effect |
 |---|---|---|
-| `squeeze` | `{pattern: plain\|duress\|unrecognized, k, buffered?}` | Answers a prompt (`k` must equal the challenge count, 2 for a routine prompt). Wrong `k` gets one retry with a new count. `duress` opens a masked alert, or turns the open alert into a masked duress alert. Otherwise, during an alert, it is recorded only. |
+| `squeeze` | `{pattern: plain\|duress\|unrecognized, k, buffered?, challenge_id?}` | Answers a prompt (`k` must equal the challenge count, 2 for a routine prompt). Wrong `k` gets one retry with a new count. `duress` opens a masked alert, or turns the open alert into a masked duress alert. Otherwise, during an alert, it is recorded only. |
 | `head_position_change`, `fall_like`, `offbody` | any object (not read) | `ARMED` → `PROMPTED` with a counted challenge, at most once per cooldown (60 s demo, 15 min real). |
 | `prompt_shown` | `{}` | Lowers the prompt deadline to "shown + window". |
 
@@ -934,8 +938,11 @@ No auth. `200` when the database answers, `503` with `"db":"down"` otherwise. Th
 `rule_thresholds` lists the night-out sensor and heart-rate thresholds. None has a published source to tune
 it against; they only decide when to ask sooner.
 
-With a valid `X-Admin-Key` it also returns `pending_timers` and `pending_outbox`. They are not public: a duress
-PIN adds escalation timers and contact messages, so public counts would tell it apart from the real PIN.
+With a valid `X-Admin-Key` it also returns `pending_timers`, `pending_outbox` and `failing_timers`. They are
+not public: a duress PIN adds escalation timers and contact messages, so public counts would tell it apart from
+the real PIN. `failing_timers` counts deadlines whose transition raised an error: a timer is never dropped
+after errors; it is retried (backoff capped at 30 s) until it fires, and `GET /v1/admin/timers` shows its
+`attempts` and `last_error`.
 
 ## 11. Outbound services
 

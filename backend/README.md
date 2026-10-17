@@ -17,8 +17,8 @@ Sensors and heart rate only ever bring the next check-in forward.
 | A duress alert reaches only the contacts the wearer chose as duress recipients (every approved contact if she chose none); a contact kept out never hears of it and cannot take or close it, and sees the twin instead | `states.duress_ladder`, `routes/contacts.py` `_alert_for_contact`, `engine.contact_alert`, `PUT /v1/contacts/{id}/duress` | `test_duress_recipients.py` (unit, random walks, HTTP), `test_masking_twin_db.py` |
 | FINAL shows "Emergency services: SIMULATED" and never calls anyone | `states._enter_final` (logged `placed: false`; no calling code exists) | `test_arm_no_response_l1_l2_final` |
 | LOST_CONTACT has its own wording; pending deadlines keep running | `states._on_lease_expired` | `test_lost_contact_*` |
-| Timers are rows claimed with `FOR UPDATE SKIP LOCKED` and survive `kill -9` | `app/timers.py` | `test_skip_locked_lets_one_worker_take_a_timer`, `test_chaos_kill9.py` |
-| Outbox is at-least-once with a dedupe key; Telegram 429 `retry_after` honoured | `app/outbox.py` | `test_outbox_telegram_db.py` |
+| Timers are rows claimed with `FOR UPDATE SKIP LOCKED` and survive `kill -9`; a timer fires once, and one whose transition errors is retried until it fires, never dropped | `app/timers.py` | `test_skip_locked_lets_one_worker_take_a_timer`, `test_chaos_kill9.py`, `test_robustness_db.py` |
+| Outbox is at-least-once with a dedupe key, in queue order per recipient; Telegram 429 `retry_after` honoured | `app/outbox.py` | `test_outbox_telegram_db.py`, `test_robustness_db.py` |
 | Banned wording never appears in shipped text | `app/messages.py` | `test_wording.py` |
 | No model (LLM) in any safety decision | the state machine is plain code | — |
 
@@ -58,7 +58,7 @@ Everything below runs from `backend/` with the project venv. `backend/.env` is r
 | Kill the listener | `scripts/chaos.sh kill [port]` | `kill -9 $(lsof -tiTCP:<port> -sTCP:LISTEN)`: only the listening server, never the Chrome tabs connected to it. |
 | kill -9 mid-REMINDED | `ADMIN_KEY=... scripts/chaos.sh mid-reminded [port]` | Needs `serve.sh` running. Resets the demo session, drives it to REMINDED, kills the listener, waits for the restart and checks the stored deadline fired L1 within 2 s, with exactly one message. |
 | Scrunchie over USB | `../.venv/bin/python scripts/bridge.py --port /dev/cu.usbserial-XXXX --wear-mode hair` | Line protocol below. `--stdin` reads lines from stdin instead (no hardware, no pyserial). `--heartbeat-s 15` for the real profile. |
-| All 7 KAZE scenarios + PCC seed | `../.venv/bin/python scripts/simulate.py [1 2 ... pcc]` | Fake device + fake web contacts over HTTP, then the PointClickCare cohort seed; prints PASS/FAIL per step, exits 1 on any failure; about 2.5 min. It refuses to run while the demo wearer has approved contacts it didn't create (they would get real alerts), so point it at its own server and database, e.g. `PORT=8001 DATABASE_URL=.../stillhere_sim scripts/serve.sh` and `STILLHERE_URL=http://127.0.0.1:8001`. |
+| All 7 KAZE scenarios + PCC seed | `../.venv/bin/python scripts/simulate.py [1 2 ... pcc]` | Fake device + fake web contacts over HTTP, then the PointClickCare cohort seed; prints PASS/FAIL per step, exits 1 on any failure; about 2.5 min. It refuses to run while the demo wearer has approved contacts it didn't create (they would get real alerts), so point it at its own server and database, e.g. `TELEGRAM_BOT_TOKEN= PORT=8001 DATABASE_URL=.../stillhere_sim scripts/serve.sh` and `STILLHERE_URL=http://127.0.0.1:8001` (an empty bot token: a second poller on the team's bot would take contacts' taps; `simulate.py` refuses a server with a token). |
 | Contact / judge page | `GET /c/{token}` | Consent screen ("Tap to ask to become Contact #N"); the tap also unlocks a looping alarm (started muted), sets `navigator.audioSession` to playback, resumes an AudioContext and takes a screen wake lock. Polls status every second; on an alert the screen turns red and the alarm unmutes (the phone rings). FINAL shows the SIMULATED banner. |
 | Heart-rate bridge | `http://localhost:8000/hr-bridge` in Chrome | Web Bluetooth Heart Rate service (0x180D / 0x2A37) from HeartCast on the iPhone. Posts to `/v1/hr` from the notification handler, reconnects with backoff, and a SIM button streams simulated heart rate labelled `simulated: true`. Needs the wearer key (or a device key plus device ID). |
 
@@ -76,7 +76,9 @@ The bridge posts a heartbeat every 2 s only while H lines keep arriving, so unpl
 device lets the server's lease run out (LOST_CONTACT). Events go out at once with
 `event_id = boot_id:seq` and are retried after 1, 2, 4, 8 s with the same id; while the server
 is down they wait in memory and are flushed duress first, then oldest first, marked
-`buffered: true` so a late squeeze is reported as late and never stands an alert down.
+`buffered: true` so a late squeeze is reported as late and never stands an alert down. A squeeze
+carries the `challenge_id` of the prompt the device was showing, so a held-back squeeze never answers a
+prompt issued while it waited.
 
 ## Tests
 
@@ -150,7 +152,10 @@ contacts read alerts on the live page. To plug it in:
 1. Create a bot with @BotFather, name it "Reminders"; put the token in
    `TELEGRAM_BOT_TOKEN` and its username in `TELEGRAM_BOT_USERNAME`.
 2. Restart. The poller clears any webhook and long-polls `getUpdates`; only one
-   process polls (Postgres advisory lock).
+   process per database polls (Postgres advisory lock), so never point a second
+   server on another database at the same token. The offset is kept per bot and
+   follows Telegram's update ids even when they restart lower (a new token, or a
+   bot idle for a week); each update is processed once (`tg_updates`).
 3. Wearer: `POST /v1/me/telegram-link`, open the `t_me_link` and press Start.
    "Reminder" nudges then arrive in that chat, which the Apple Watch mirrors as a silent tap.
 4. Contacts: open the invite's `t_me_link` and press Start, then the wearer approves them.

@@ -14,6 +14,9 @@ HTTP
                              8 s) with the same id. While the server is unreachable, events wait in memory
                              and are flushed duress first, then oldest first, marked buffered=true so the
                              server treats them as late (a late squeeze never stands an alert down).
+                             A squeeze carries the challenge_id of the prompt the device was showing
+                             when it arrived (none if no prompt): a held-back squeeze then answers only
+                             that prompt, never one issued while it waited.
   Headers: Authorization: Bearer <device key>, X-Device-Id, X-Boot-Id, X-Seq.
 
 Usage (from backend/):
@@ -163,6 +166,7 @@ class Bridge:
     clock: Callable[[], float] = time.monotonic
     last_h: Optional[Heartbeat] = None
     last_hb_post: float = float("-inf")
+    challenge_id: Optional[str] = None  # the prompt the device is showing (from the last C line)
     events: list = field(default_factory=list)
     stats: dict = field(default_factory=lambda: {"H": 0, "E": 0, "R": 0, "bad": 0, "hb_ok": 0, "hb_fail": 0,
                                                  "ev_ok": 0, "ev_retry": 0, "ev_dropped": 0})
@@ -181,6 +185,8 @@ class Bridge:
         elif kind == "E":
             if any(e.event_id == item.event_id for e in self.events):
                 return  # the device repeated a line we still hold
+            if item.type == "squeeze" and self.challenge_id and "challenge_id" not in item.payload:
+                item.payload["challenge_id"] = self.challenge_id
             self.events.append(item)
             if len(self.events) > self.max_buffer:
                 # Keep duress events; drop the oldest other event.
@@ -196,7 +202,10 @@ class Bridge:
                 "X-Boot-Id": boot_id, "X-Seq": str(seq)}
 
     def _send_cmd(self, reply: dict) -> None:
-        line = c_line(reply.get("cmd"))
+        cmd = reply.get("cmd")
+        if isinstance(cmd, dict):
+            self.challenge_id = cmd.get("challenge_id") or None
+        line = c_line(cmd)
         if line:
             self.write_line(line)
 

@@ -533,10 +533,13 @@ async def test_rows_claimed_by_a_killed_sender_go_out_right_after_restart(client
                            "AND session_id IS DISTINCT FROM %s", (w.session_id,))
     dead = Sender(db, ctx)
     claimed = await ob.claim(db, token=dead.token)
-    assert len(claimed) == 3  # Reminder, Reminder N, the L1 alert
+    # One row per recipient, oldest first: the wearer's "Reminder" (her "Reminder N" waits for it) and
+    # the L1 alert.
+    assert [r["template"] for r in claimed] == ["reminder", "alert_no_response"]
     # kill -9 here: the rows stay 'sending' with a 30 s lease. A restarted sender sends them now.
     restarted = Sender(db, ctx)
     assert await restarted.run_once() == len(claimed)
+    assert await restarted.run_once() == 1          # then "Reminder N"
     rows = await outbox(db, w.session_id)
     assert {r["status"] for r in rows} == {"sent"}
 
