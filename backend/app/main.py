@@ -24,6 +24,7 @@ from .db import Database
 from .engine import Ctx
 from .outbox import outbox_sender
 from .routes import contacts, demo, device, health, hr, sessions
+from .routes import care as care_routes
 from .telegram import telegram_poller
 from .timers import timer_worker
 from .routes import telemetry
@@ -115,6 +116,7 @@ def create_app(settings: Optional[Settings] = None, *, start_workers: Optional[b
     app.include_router(telemetry.router)
     for r in (health.router, device.router, hr.router, sessions.router, contacts.router, demo.router):
         app.include_router(r)
+    app.include_router(care_routes.router)
     return app
 
 
