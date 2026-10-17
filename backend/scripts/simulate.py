@@ -513,8 +513,12 @@ class Run:
         self.dev.heartbeat()
         hr = lambda bpm, n: self.srv.wearer(  # noqa: E731
             "POST", "/v1/hr", json={"source": "simulate.py", "simulated": True, "samples": [{"bpm": bpm}] * n})
-        self.srv.ok(hr(72, 10), "HR post")
-        self.srv.ok(self.srv.wearer("POST", "/v1/hr/calibrate", json={"window_s": 10, "allow_simulated": True}),
+        # Calibration counts one reading per 5 s (a burst of notifications is one reading), so the
+        # baseline samples are spread 5 s apart over the last minute.
+        spread = [{"bpm": 72, "t": time.time() - 55 + 5 * i} for i in range(12)]
+        self.srv.ok(self.srv.wearer("POST", "/v1/hr", json={"source": "simulate.py", "simulated": True,
+                                                             "samples": spread}), "HR post")
+        self.srv.ok(self.srv.wearer("POST", "/v1/hr/calibrate", json={"window_s": 60, "allow_simulated": True}),
                     "calibrate")
         self.srv.ok(hr(118, 20), "HR post")
         t0 = time.monotonic()

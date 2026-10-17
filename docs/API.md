@@ -187,13 +187,16 @@ or a single sample: `{"ts": "2026-10-17T07:33:53Z", "bpm": 72, "source": "apple_
 ### `POST /v1/hr/calibrate`
 
 Wearer key. Seated baseline before going out: the median of the last `window_s` seconds (10–3600,
-default 300), real samples only unless `allow_simulated` is true. Needs at least 5 samples (`409` otherwise).
+default 300), real samples only unless `allow_simulated` is true. Needs at least 5 independent readings,
+counted as one per 5-second slot (`409` otherwise): the Watch gives a new value about every 5 s while
+HeartCast notifies about once a second, so repeated notifications are one reading. The median takes one
+value per slot.
 
 ```json
 {"window_s": 300}
 ```
 ```json
-{"ok": true, "baseline_bpm": 71.0, "samples": 7, "simulated": false}
+{"ok": true, "baseline_bpm": 71.0, "samples": 60, "readings": 12, "simulated": false}
 ```
 
 ### `GET /hr-bridge`

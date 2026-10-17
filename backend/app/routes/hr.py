@@ -23,6 +23,12 @@ from ..deps import get_db, require_device, require_wearer
 router = APIRouter(tags=["heart rate"])
 
 MAX_SKEW = timedelta(minutes=5)
+# Independent readings (research 1.13): the Apple Watch gives a new heart-rate value about every
+# 5 s (Apple Support 120277) while HeartCast notifies about once a second (Bluetooth Heart Rate
+# Service: "approximately 1 time per second"), so most notifications repeat the last value. A
+# minimum-sample check counts at most one reading per 5-second slot, never notifications.
+READING_SLOT_S = 5
+MIN_READINGS = 5
 PAGES = Path(__file__).resolve().parent.parent / "pages"
 
 
@@ -124,14 +130,20 @@ async def calibrate(request: Request, body: Optional[CalibrateIn] = None):
         async with conn.transaction():
             user = await require_wearer(request, conn)
             cur = await conn.execute(
-                """SELECT bpm, simulated FROM hr_samples
+                """SELECT bpm, simulated, floor(extract(epoch FROM time) / %s)::bigint AS slot FROM hr_samples
                     WHERE user_id = %s AND time > now() - make_interval(secs => %s)
                       AND (%s OR NOT simulated)""",
-                (user["id"], float(body.window_s), body.allow_simulated))
+                (READING_SLOT_S, user["id"], float(body.window_s), body.allow_simulated))
             rows = await cur.fetchall()
-            if len(rows) < 5:
-                raise HTTPException(409, f"need at least 5 samples in the last {body.window_s} s, have {len(rows)}")
-            baseline = float(statistics.median(r["bpm"] for r in rows))
+            by_slot: dict[int, list[int]] = {}
+            for r in rows:
+                by_slot.setdefault(r["slot"], []).append(r["bpm"])
+            if len(by_slot) < MIN_READINGS:
+                raise HTTPException(409, f"need at least {MIN_READINGS} independent readings (one per "
+                                         f"{READING_SLOT_S} s) in the last {body.window_s} s, have {len(by_slot)} "
+                                         f"from {len(rows)} samples")
+            # One value per slot, so a burst of repeated notifications weighs like one reading.
+            baseline = float(statistics.median(statistics.median(v) for v in by_slot.values()))
             sim = any(r["simulated"] for r in rows)
             await conn.execute(
                 """INSERT INTO user_baselines (user_id, kind, value, simulated, computed_at)
@@ -139,4 +151,4 @@ async def calibrate(request: Request, body: Optional[CalibrateIn] = None):
                    ON CONFLICT (user_id, kind) DO UPDATE
                    SET value = EXCLUDED.value, simulated = EXCLUDED.simulated, computed_at = now()""",
                 (user["id"], baseline, sim))
-    return {"ok": True, "baseline_bpm": baseline, "samples": len(rows), "simulated": sim}
+    return {"ok": True, "baseline_bpm": baseline, "samples": len(rows), "readings": len(by_slot), "simulated": sim}
