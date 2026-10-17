@@ -223,6 +223,58 @@ async def maybe_purge_locations(db) -> bool:
         return False
 
 
+# --- personal timeline retention (BUILD_PLAN §6.3) ------------------------------------------------------
+TIMELINE_DAYS = 30
+TIMELINE_EXPIRY_EVERY_S = 3600.0
+_last_timeline_expiry: dict[str, float] = {}
+
+
+async def expire_timelines(conn, days: int = TIMELINE_DAYS) -> dict:
+    """Delete the timeline of every session that ended more than `days` ago and is not pinned, with the
+    erase flag "Delete my data" uses, and leave one tombstone per wearer on her account chain.
+
+    Only entries she can see go (audit.VISIBLE_SQL): the hidden entries of a masked duress alert that is
+    still open stay until it closes, exactly as with "Delete my data". `ended_at` is the end she saw, so a
+    session that only looks ended (duress end) loses its visible entries on the same day as a real one."""
+    async with conn.transaction():
+        await conn.execute("SET LOCAL stillhere.erase = 'on'")
+        rows = await (await conn.execute(
+            f"""DELETE FROM audit_log a USING sessions s
+                 WHERE a.session_id = s.id AND NOT s.pinned
+                   AND s.ended_at < now() - make_interval(days => %s) AND {audit.VISIBLE_SQL}
+             RETURNING s.user_id, s.id AS session_id""", (int(days),))).fetchall()
+        await conn.execute("SET LOCAL stillhere.erase = 'off'")
+        per_user: dict = {}
+        for r in rows:
+            u = per_user.setdefault(r["user_id"], {"sessions": set(), "entries": 0})
+            u["sessions"].add(r["session_id"])
+            u["entries"] += 1
+        for user_id, u in per_user.items():
+            await audit.append(conn, chain_key=audit.user_chain(user_id), actor="system", kind="timeline_erased",
+                               user_id=user_id, detail={"by": "retention", "after_days": int(days),
+                                                        "sessions": len(u["sessions"]), "audit_rows": u["entries"]})
+    return {"sessions": sum(len(u["sessions"]) for u in per_user.values()), "entries": len(rows),
+            "users": [str(u) for u in per_user]}
+
+
+async def maybe_expire_timelines(db) -> bool:
+    """From the timer worker: at most hourly per database. Best effort; the next run catches up."""
+    key = db.conninfo
+    now = time.monotonic()
+    if now - _last_timeline_expiry.get(key, -1e9) < TIMELINE_EXPIRY_EVERY_S:
+        return False
+    _last_timeline_expiry[key] = now
+    try:
+        async with db.connection() as conn:
+            out = await expire_timelines(conn)
+        if out["entries"]:
+            log.info("timeline retention: %d entries of %d sessions deleted", out["entries"], out["sessions"])
+        return True
+    except Exception as exc:
+        log.warning("timeline retention failed: %s", type(exc).__name__)
+        return False
+
+
 def location_token(ctx: Ctx, alert_id: int, nonce: str) -> str:
     return derive_token(ctx.secret, "loc", str(alert_id), nonce)
 

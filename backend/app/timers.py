@@ -125,6 +125,8 @@ async def timer_worker(db, ctx: Ctx, stop: asyncio.Event, tick_s: float = 1.0) -
             await timeseries.maybe_prune(db)
             # Real locations older than 48 h (research 1.15), at most every 10 minutes.
             await engine.maybe_purge_locations(db)
+            # Timelines of sessions that ended over 30 days ago and are not pinned, at most hourly.
+            await engine.maybe_expire_timelines(db)
         except asyncio.CancelledError:
             raise
         except Exception:

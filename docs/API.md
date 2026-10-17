@@ -351,19 +351,33 @@ The session's timeline. Duress entries stay hidden until that alert is closed.
    "detail": {"n": 1, "level": "MED", "reason": "head_position_change", "simulated": false}}]}
 ```
 
+### `POST /v1/sessions/{session_id}/pin`
+
+Wearer key. `{"pinned": true}` (the default) keeps this session's timeline past the 30-day retention;
+`{"pinned": false}` lets it go again. Reply: `{"ok": true, "session_id": "…", "pinned": true}`. Another wearer's
+session answers `404`.
+
+Retention: a session's visible timeline is deleted 30 days after the session ended unless it is pinned. The
+timer worker runs the job at most hourly, with the same erase flag as `DELETE /v1/me/data`, and appends one
+`timeline_erased` tombstone (`detail.by: "retention"`) to her account chain. Hidden entries of a duress alert
+that is still open stay until it closes.
+
 ### `GET /v1/me/export`
 
 Every session's visible timeline. The server recomputes the per-session and account hash chains
-(`chain_ok`). `head_hash` is the chain over the listed entries (each carries its `masked` flag), so it can be
+(`chain_ok`). `?format=html` returns the same as one printable page (`text/html`): her name, each session with
+"Chain verified ✓" or "Chain check failed ✗", its head hash and its entries, and the account chain. Same wearer
+key; the page loads no script. `head_hash` is the chain over the listed entries (each carries its `masked` flag), so it can be
 recomputed from the export with `app/audit.py`; the "Ended ✓ Timeline head" message carries its first 16
 characters.
 
 ```json
 {"user": "Maya",
  "sessions": [{"session_id": "…", "created_at": "…", "ended_at": null, "chain_ok": true,
-               "head_hash": "b8b6953c…", "entries": ["…"]}],
+               "pinned": false, "head_hash": "b8b6953c…", "entries": ["…"]}],
  "account_chain_ok": true, "account_head_hash": "51de3e74…",
- "note": "Hash-chained: any edit after export breaks the chain when it is recomputed."}
+ "note": "Hash-chained: any edit after export breaks the chain when it is recomputed.",
+ "retention": "Each session's timeline is deleted 30 days after it ended unless you pin it."}
 ```
 
 ### `GET /v1/me/alerts`

@@ -162,8 +162,8 @@ Both read `ADMIN_KEY`, `DEVICE_KEY`, `DEMO_DEVICE_ID`, `WEARER_KEY`, `DEMO_PIN` 
 
 ## Demo steps
 
-Set `URL` and `ADMIN_KEY` in your shell first. Every operator action below is labelled as demo in the
-timeline.
+Set `URL` and `ADMIN_KEY` (and `WEARER_KEY` for the export) in your shell first. Every operator action below
+is labelled as demo in the timeline.
 
 ```bash
 op() { local body='{}'; [ -n "${2:-}" ] && body=$2; curl -s -X POST "$URL$1" -H "X-Admin-Key: $ADMIN_KEY" -H 'Content-Type: application/json' -d "$body"; echo; }
@@ -197,7 +197,7 @@ op() { local body='{}'; [ -n "${2:-}" ] && body=$2; curl -s -X POST "$URL$1" -H 
 | 3 Duress | Next check-in: Maya squeezes the duress pattern | The watch shows the same "Noted ✓". Contact #1's Telegram: "SILENT HELP REQUEST… Don't call her phone." Contact #1 taps "I'm on it", then "I'm with her – she's safe". An acknowledgement alone never closes an alert. |
 | 2 No response, 5 Unacknowledged, 4 Lost contact | 1. Maya bows her head, held 5 s (fallback: `op /v1/demo/inject '{"kind":"head_position"}'`). 2. She squeezes a wrong count. 3. `backend/scripts/chaos.sh kill`. 4. Pull the USB cable. | 1. "Reminder 3" (head position change → early check-in). 2. "2 ≠ 3, still open": one retry with a new count; at the deadline, REMINDED and a new "Reminder N". 3. The server restarts and L1 fires on time; Contact #1 ignores it. 4. After 10 s: "We lost contact with Maya's device… Cause unknown." After the ack window, L2: the judge's page turns red and rings. Judge taps "I'm on it", then "I'm with her". Replug: "Contact restored". |
 | 6 False alarm | `op /v1/demo/hr-source '{"mode":"sim:climb_still"}'` (badged SIMULATED), then `op /v1/demo/fast-forward` until L1 | Simulated heart rate only brings a check-in forward. Maya's real PIN (`POST /v1/sessions/{session_id}/cancel`): "False alarm: Maya cancelled with her PIN." |
-| 7 Privacy | Open the alert's location link after resolution | `410 Gone` after 15 s; contacts' pages are blank again. `GET /v1/me/export` shows `chain_ok: true`. |
+| 7 Privacy | Open the alert's location link after resolution | `410 Gone` after 15 s; contacts' pages are blank again. The printable export shows "Chain verified ✓" per session: `curl -s "$URL/v1/me/export?format=html" -H "Authorization: Bearer $WEARER_KEY" > export.html`, then open the file in the browser (JSON without `format`). |
 
 **After:** `op /v1/demo/reset`, and `op /v1/demo/hr-source '{"mode":"live"}'`.
 
@@ -329,7 +329,8 @@ Notes:
 | Device auth: static bearer key | **Assumed / disclosed** | HMAC and certificate pinning are roadmap |
 | Duress replies byte-identical | **Demonstrated** (tests) | Response-timing side channel not addressed |
 | No data before an alert; 410 link expiry; export / delete | **Demonstrated** | Formal privacy review |
-| Personal timeline hash chain | **Demonstrated** (export recomputes the chain) | The server itself could recompute a chain before export; it is a personal record, not proof against the operator |
+| Personal timeline hash chain | **Demonstrated** (export recomputes the chain; `?format=html` prints it with "Chain verified ✓" per session) | The server itself could recompute a chain before export; it is a personal record, not proof against the operator |
+| Personal timeline retention: deleted 30 days after the session ended unless pinned | **Configured** (hourly job in the timer worker; tested with backdated sessions) | Same erase flag and tombstone as "Delete my data" |
 | Response windows adjustable up to 10× | **Demonstrated** (`window_multiplier`) | Usability with real users |
 | Hosting on a Vultr Compute VM (compose + Caddy HTTPS) | **Configured**; the same compose stack was smoke-tested locally | Not yet deployed from this repo |
 | Vultr Serverless Inference wording of PCC briefings | **Configured** and wired into `GET /v1/care/alerts`; tested against a mocked endpoint, and the template fallback is covered by tests | A live call needs a key. Before display the text is checked against the banned terms and the senior-mode wording rules, and every number in it must be on the card |

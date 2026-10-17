@@ -6,11 +6,13 @@ duress entries stay hidden until the alert is resolved.
 """
 from __future__ import annotations
 
+import html
 import math
 import uuid
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .. import audit, engine, messages, states, timeseries
@@ -49,6 +51,10 @@ class CheckinIn(BaseModel):
 
 class PinIn(BaseModel):
     pin: str = Field(min_length=1, max_length=32)
+
+
+class PinTimelineIn(BaseModel):
+    pinned: bool = True
 
 
 async def who_can_be_alerted(conn, user_id) -> list[dict]:
@@ -206,32 +212,105 @@ async def timeline(request: Request, session_id: str):
         return {"session_id": str(sess["id"]), "entries": await visible_timeline(conn, sess["id"])}
 
 
+@router.post("/v1/sessions/{session_id}/pin")
+async def pin_timeline(request: Request, session_id: str, body: Optional[PinTimelineIn] = None):
+    """Keep this session's timeline past the 30-day retention (or let it go again with pinned=false)."""
+    body = body or PinTimelineIn()
+    db = get_db(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            sess = await _own_session(conn, user, session_id)
+            await conn.execute("UPDATE sessions SET pinned = %s WHERE id = %s", (body.pinned, sess["id"]))
+    return {"ok": True, "session_id": str(sess["id"]), "pinned": body.pinned}
+
+
 @router.get("/v1/me/export")
-async def export(request: Request):
-    """Personal timeline export with chain verification (server-side recompute)."""
+async def export(request: Request, format: Literal["json", "html"] = Query(default="json")):
+    """Personal timeline export with chain verification (server-side recompute). format=html: the same
+    as a printable page."""
     db = get_db(request)
     async with db.connection() as conn:
         user = await require_wearer(request, conn)
-        sessions = await (await conn.execute(
-            "SELECT id, created_at, ended_at FROM sessions WHERE user_id = %s ORDER BY created_at",
-            (user["id"],))).fetchall()
-        # After "Delete my data" a chain may start after erased rows (entries kept for an open alert).
-        erased = await (await conn.execute(
-            "SELECT 1 FROM audit_log WHERE chain_key = %s AND kind = 'timeline_erased' LIMIT 1",
-            (audit.user_chain(user["id"]),))).fetchone() is not None
-        out = []
-        for s in sessions:
-            chain = await audit.verify_chain(conn, audit.session_chain(s["id"]), after_erase=erased)
-            rows = await audit.visible_rows(conn, s["id"])
-            # head_hash covers the listed entries (each with its masked flag), so anyone can recompute it.
-            out.append({"session_id": str(s["id"]), "created_at": s["created_at"].isoformat(),
-                        "ended_at": s["ended_at"].isoformat() if s["ended_at"] else None,
-                        "chain_ok": chain["ok"], "head_hash": audit.public_head(rows),
-                        "entries": [{**_entry(r), "masked": r["masked"]} for r in rows]})
-        user_chain = await audit.verify_chain(conn, audit.user_chain(user["id"]), after_erase=erased)
-        return {"user": user["display_name"], "sessions": out,
-                "account_chain_ok": user_chain["ok"], "account_head_hash": user_chain["head"],
-                "note": "Hash-chained: any edit after export breaks the chain when it is recomputed."}
+        data = await _export_data(conn, user)
+    if format == "html":
+        return HTMLResponse(render_export_html(data))
+    return data
+
+
+async def _export_data(conn, user: dict) -> dict:
+    sessions = await (await conn.execute(
+        "SELECT id, created_at, ended_at, pinned FROM sessions WHERE user_id = %s ORDER BY created_at",
+        (user["id"],))).fetchall()
+    # After "Delete my data" a chain may start after erased rows (entries kept for an open alert).
+    erased = await (await conn.execute(
+        "SELECT 1 FROM audit_log WHERE chain_key = %s AND kind = 'timeline_erased' LIMIT 1",
+        (audit.user_chain(user["id"]),))).fetchone() is not None
+    out = []
+    for s in sessions:
+        chain = await audit.verify_chain(conn, audit.session_chain(s["id"]), after_erase=erased)
+        rows = await audit.visible_rows(conn, s["id"])
+        # head_hash covers the listed entries (each with its masked flag), so anyone can recompute it.
+        out.append({"session_id": str(s["id"]), "created_at": s["created_at"].isoformat(),
+                    "ended_at": s["ended_at"].isoformat() if s["ended_at"] else None, "pinned": s["pinned"],
+                    "chain_ok": chain["ok"], "head_hash": audit.public_head(rows),
+                    "entries": [{**_entry(r), "masked": r["masked"]} for r in rows]})
+    user_chain = await audit.verify_chain(conn, audit.user_chain(user["id"]), after_erase=erased)
+    return {"user": user["display_name"], "sessions": out,
+            "account_chain_ok": user_chain["ok"], "account_head_hash": user_chain["head"],
+            "note": "Hash-chained: any edit after export breaks the chain when it is recomputed.",
+            "retention": f"Each session's timeline is deleted {engine.TIMELINE_DAYS} days after it ended "
+                         "unless you pin it."}
+
+
+_EXPORT_CSS = """
+:root { color-scheme: light; }
+body { font: 14px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; margin: 24px auto; max-width: 960px;
+       padding: 0 16px; color: #111; background: #fff; }
+h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 24px 0 6px; }
+.meta, .note { color: #444; } .hash { font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; }
+.ok { color: #0a6b2d; font-weight: 600; } .bad { color: #a40000; font-weight: 600; }
+table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+th, td { border: 1px solid #bbb; padding: 4px 6px; text-align: left; vertical-align: top; font-size: 12px; }
+th { background: #f0f0f0; }
+@media print { body { margin: 0; max-width: none; } h2 { break-after: avoid; } tr { break-inside: avoid; } }
+"""
+
+
+def _chain_badge(ok: bool) -> str:
+    return '<span class="ok">Chain verified ✓</span>' if ok else '<span class="bad">Chain check failed ✗</span>'
+
+
+def render_export_html(data: dict) -> str:
+    """The export as one printable page. Every value is escaped; nothing here loads a script."""
+    e = html.escape
+    parts = ["<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
+             '<meta name="viewport" content="width=device-width, initial-scale=1">',
+             f"<title>StillHere timeline: {e(str(data['user']))}</title><style>{_EXPORT_CSS}</style></head><body>",
+             f"<h1>Personal timeline: {e(str(data['user']))}</h1>",
+             f'<p class="meta">Account record: {_chain_badge(data["account_chain_ok"])} '
+             f'· head <span class="hash">{e(str(data["account_head_hash"] or "-"))}</span></p>',
+             f'<p class="note">Personal timeline, kept for you. {e(data["note"])} {e(data["retention"])}</p>']
+    if not data["sessions"]:
+        parts.append("<p>No sessions.</p>")
+    for s in data["sessions"]:
+        ended = e(s["ended_at"]) if s["ended_at"] else "running"
+        parts.append(f"<h2>Session {e(s['session_id'])}</h2>")
+        parts.append(f'<p class="meta">Started {e(s["created_at"])} · ended {ended}'
+                     f'{" · pinned" if s.get("pinned") else ""} · {_chain_badge(s["chain_ok"])}<br>'
+                     f'Head <span class="hash">{e(s["head_hash"] or "-")}</span></p>')
+        if not s["entries"]:
+            parts.append("<p>No entries.</p>")
+            continue
+        parts.append("<table><thead><tr><th>Time (UTC)</th><th>By</th><th>Entry</th><th>State</th>"
+                     "</tr></thead><tbody>")
+        for x in s["entries"]:
+            st = " → ".join(v for v in (x["from_state"], x["to_state"]) if v) or ""
+            parts.append(f"<tr><td>{e(x['at'])}</td><td>{e(str(x['actor']))}</td><td>{e(str(x['kind']))}</td>"
+                         f"<td>{e(st)}</td></tr>")
+        parts.append("</tbody></table>")
+    parts.append("</body></html>")
+    return "\n".join(parts)
 
 
 @router.get("/v1/me/alerts")
