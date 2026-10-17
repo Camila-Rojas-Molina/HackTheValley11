@@ -207,7 +207,7 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
 
     if d.challenge_n is None:
         challenge_id = None
-    elif d.changed or d.challenge_n != sess["challenge_n"]:
+    elif d.public_changed or d.challenge_n != sess["challenge_n"]:
         challenge_id = secrets.token_hex(3)
     else:
         challenge_id = sess["challenge_id"]
@@ -235,6 +235,13 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
         raise StaleTransition(f"session {session_id} moved under us")
 
     # Timers
+    if d.rekind_cover:
+        # A masked duress alert opens: the check-in schedule the wearer sees keeps running
+        # as cover timers, which the escalation's transitions do not cancel.
+        await conn.execute(
+            """UPDATE timers SET kind = 'COVER_' || kind, expected_version = NULL
+                WHERE session_id = %s AND fired_at IS NULL AND cancelled_at IS NULL AND kind = ANY(%s)""",
+            (session_id, list(states.COVER_OF)))
     if d.cancel_all_timers:
         await conn.execute(
             """UPDATE timers SET cancelled_at = now()
@@ -402,7 +409,8 @@ async def lower_prompt_deadline(conn, session_id, delivered_at_sql: str = "now()
     cur = await conn.execute(
         f"""UPDATE timers
                SET fire_at = LEAST(fire_at, {delivered_at_sql} + make_interval(secs => (payload->>'window_s')::float8))
-             WHERE session_id = %s AND kind IN ('PROMPT_TIMEOUT', 'REMINDER_TIMEOUT')
+             WHERE session_id = %s
+               AND kind IN ('PROMPT_TIMEOUT', 'REMINDER_TIMEOUT', 'COVER_PROMPT_TIMEOUT', 'COVER_REMINDER_TIMEOUT')
                AND fired_at IS NULL AND cancelled_at IS NULL AND payload ? 'window_s'""", (session_id,))
     return cur.rowcount
 

@@ -12,7 +12,8 @@ a clock or calls a model, so every safety rule below is unit-testable:
 * A device squeeze during an alert leaves the state unchanged.
 * A duress squeeze or duress PIN produces exactly the wearer-facing output
   (reply, public state, wearer message, visible timeline entry) of the
-  matching OK action; the alert is masked.
+  matching OK action; the alert is masked, and from then on the wearer sees a
+  twin session that used the real PIN (see "masked duress: the twin").
 * LOST_CONTACT has its own wording and never stops pending deadlines.
 
 `_finish` re-checks the first three rules on every decision and raises
@@ -22,7 +23,7 @@ or standing down.
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Sequence
 
 # --- states -----------------------------------------------------------------
@@ -76,19 +77,32 @@ LEASE_EXPIRED = "LEASE_EXPIRED"
 LOST_CONTACT_NOTIFY = "LOST_CONTACT_NOTIFY"
 LINK_RESTORED = "LINK_RESTORED"
 
+# Cover check-ins of a masked duress session (see "Masked duress" below): the
+# check-in schedule a twin session that used the real PIN would keep running.
+COVER_CHECKIN_DUE = "COVER_CHECKIN_DUE"
+COVER_PROMPT_TIMEOUT = "COVER_PROMPT_TIMEOUT"
+COVER_REMINDER_TIMEOUT = "COVER_REMINDER_TIMEOUT"
+COVER_OF = {CHECKIN_DUE: COVER_CHECKIN_DUE, PROMPT_TIMEOUT: COVER_PROMPT_TIMEOUT,
+            REMINDER_TIMEOUT: COVER_REMINDER_TIMEOUT}
+TWIN_OF = {v: k for k, v in COVER_OF.items()}
+COVER_TIMER_KINDS = tuple(COVER_OF.values())
+
 ALL_EVENTS = (
     CHECKIN_DUE, PULL_FORWARD, SQUEEZE, WEARER_OK, PROMPT_TIMEOUT, REMINDER_TIMEOUT,
     ACK_TIMEOUT, RENOTIFY, FOLLOWUP_TIMEOUT, SESSION_END_DUE, CONTACT_ACK, CONTACT_PASS,
     CONTACT_SAFE, CONTACT_CANT_REACH, PIN_REAL, PIN_DURESS, END_REAL, END_DURESS,
     LEASE_EXPIRED, LOST_CONTACT_NOTIFY, LINK_RESTORED,
-)
+) + COVER_TIMER_KINDS
 SENSOR_EVENTS = frozenset({PULL_FORWARD})
 RESOLVING_EVENTS = frozenset({CONTACT_SAFE, PIN_REAL, END_REAL})
+# Wearer-facing events that a masked session answers through its twin.
+COVER_EVENTS = frozenset(COVER_TIMER_KINDS) | {SESSION_END_DUE}
 
 # Timers tied to the current state carry expected_version and are cancelled on
-# every transition. Independent timers survive transitions.
+# every transition. Independent timers survive transitions (cover timers are
+# cancelled by cover transitions instead).
 STATE_TIMER_KINDS = (CHECKIN_DUE, PROMPT_TIMEOUT, REMINDER_TIMEOUT, ACK_TIMEOUT, RENOTIFY, FOLLOWUP_TIMEOUT)
-INDEPENDENT_TIMER_KINDS = (SESSION_END_DUE, LOST_CONTACT_NOTIFY)
+INDEPENDENT_TIMER_KINDS = (SESSION_END_DUE, LOST_CONTACT_NOTIFY) + COVER_TIMER_KINDS
 TIMER_KINDS = STATE_TIMER_KINDS + INDEPENDENT_TIMER_KINDS
 
 SQUEEZE_PATTERNS = ("plain", "duress", "unrecognized")
@@ -243,6 +257,9 @@ class Decision:
     alert_open_after: bool = False
     alert_masked_after: bool = False
     alert_kind_after: Optional[str] = None
+    cover: bool = False  # the wearer-facing output came from the twin (masked duress)
+    rekind_cover: bool = False  # the mask opens: pending check-in timers become cover timers
+    public_changed: bool = False  # the public prompt changed (the device gets a new challenge id)
 
     @property
     def wearer_templates(self) -> list[str]:
@@ -501,14 +518,10 @@ def _on_squeeze(snap: Snapshot, ev: Event, d: Decision, choose: Chooser) -> None
 def _duress_squeeze(snap: Snapshot, ev: Event, d: Decision) -> None:
     s = snap.state
     if s in PRE_ALERT:
-        # Cover: exactly what a correct plain squeeze shows the wearer.
-        cover_public = ARMED
-        d.audit.append(_ok_checkin_entry(snap, "device", cover_public))
+        # The wearer-facing output (reply, public state, "Noted ✓", visible entry, check-in
+        # schedule) comes from the twin, a correct plain squeeze: see _cover().
         d.audit.append(AuditEntry("duress", {"via": "device"}, masked=True))
         _open_escalation(snap, d, DURESS, masked=True)
-        d.public_state = cover_public
-        d.notify.append(Notify("wearer", "noted"))
-        d.reply = "noted"
     elif is_alerting(s):
         # Same wearer output as a late plain squeeze; contacts get the help request.
         if snap.alert is not None and snap.alert.kind != DURESS:
@@ -595,13 +608,9 @@ def _on_pin_duress(snap: Snapshot, d: Decision, end: bool) -> None:
     action, reply, wearer_t = ("end", "ended", "ended") if end else ("cancel", "cancelled", "cancelled")
     cover_public = ENDED if end else ARMED
     if s in PRE_ALERT:
-        d.audit.append(_pin_entry(snap, action, cover_public))
-        if snap.alert is not None and snap.alert.kind == LOST_CONTACT:
-            # The real PIN would show a false alarm entry here; mirror it.
-            d.audit.append(_false_alarm_entry(snap, cover_public))
+        # Wearer-facing output comes from the twin (the real PIN): see _cover().
         d.audit.append(AuditEntry("duress", {"via": "pin", "action": action}, masked=True))
         _open_escalation(snap, d, DURESS, masked=True)
-        d.public_state = cover_public
     elif is_alerting(s):
         alert = snap.alert
         if alert is not None and alert.kind == DURESS:
@@ -612,15 +621,12 @@ def _on_pin_duress(snap: Snapshot, d: Decision, end: bool) -> None:
                 d.audit.append(_pin_entry(snap, action, cover_public))
             d.audit.append(AuditEntry("duress", {"via": "pin", "action": action}, masked=True))
         else:
-            # The real PIN would close this alert as a false alarm and show
-            # `cover_public`. Mask instead: escalation continues underneath.
-            d.audit.append(_pin_entry(snap, action, cover_public))
-            d.audit.append(_false_alarm_entry(snap, cover_public))
+            # The real PIN would close this alert as a false alarm. Mask instead: escalation
+            # continues underneath and the twin (the false alarm) is what the wearer sees.
             d.audit.append(AuditEntry("duress", {"via": "pin", "action": action}, masked=True))
             d.alert_ops.append(AlertOp("upgrade", kind=DURESS, masked=True))
             for c in _recipients(snap):
                 d.notify.append(Notify("contact", "alert_duress", contact_id=c, buttons="alert"))
-            d.public_state = cover_public
     else:
         return
     d.notify.append(Notify("wearer", wearer_t))
@@ -702,6 +708,7 @@ def _on_contact_safe(snap: Snapshot, ev: Event, d: Decision) -> None:
         return
     target = ENDED if snap.public_state == ENDED else ARMED
     d.through = RESOLVED
+    d.cancel_kinds += list(COVER_TIMER_KINDS)  # a masked alert's cover schedule ends with it
     d.alert_ops.append(AlertOp("close", status=RESOLVED, by=f"contact:{ev.contact_id}"))
     for c in _recipients(snap):
         d.notify.append(Notify("contact", "resolved", contact_id=c, params={"contact_id": ev.contact_id}))
@@ -799,12 +806,88 @@ def _on_link_restored(snap: Snapshot, d: Decision) -> None:
     d.reply = "restored"
 
 
+# --- masked duress: the twin ----------------------------------------------------
+# While a masked duress alert is open, the escalation runs on `state` and the wearer
+# sees a cover: `public_state` (and the session's challenge fields) follow a *twin*,
+# the session she would have if she had used the real PIN or a plain squeeze. Every
+# wearer-facing event (COVER_EVENTS) is decided twice: the real decision keeps its
+# contact messages, alert changes and hidden entries; the twin's decision supplies
+# the reply, public state, prompt, wearer messages, visible entries and the cover
+# check-in timers. Nothing the twin does can touch the alert: its alert operations
+# and contact messages are dropped, so only "she's safe" closes a duress alert.
+def is_masked(snap: Snapshot) -> bool:
+    return snap.alert is not None and snap.alert.masked and is_alerting(snap.state)
+
+
+def _twin_snapshot(snap: Snapshot) -> Snapshot:
+    if is_alerting(snap.public_state):
+        # The cover itself escalated (its own check-in went unanswered): a no-response twin.
+        return replace(snap, state=snap.public_state, alert=replace(snap.alert, kind=NO_RESPONSE, masked=False))
+    return replace(snap, state=snap.public_state, alert=None)
+
+
+def _ok_event(twin: Snapshot, ev: Event) -> Event:
+    """The event the twin sees: the OK action for a duress one, the plain timer for a cover timer."""
+    k = ev.kind
+    if k in TWIN_OF:
+        return replace(ev, kind=TWIN_OF[k])
+    if k == PIN_DURESS:
+        return replace(ev, kind=PIN_REAL)
+    if k == END_DURESS:
+        return replace(ev, kind=END_REAL)
+    if k == SQUEEZE and ev.pattern == "duress":
+        n = twin.challenge_n if twin.state in PROMPT_STATES else ROUTINE_K
+        return replace(ev, pattern="plain", k=n)
+    return ev
+
+
+def _cover(snap: Snapshot, d: Decision, twin: Decision, opening: bool) -> None:
+    d.cover = True
+    d.rekind_cover = opening
+    escalates = is_alerting(twin.to_state) and not is_alerting(twin.from_state)
+    # A twin whose check-in went unanswered escalates: from then on the cover follows the ladder.
+    d.public_state = d.to_state if escalates else twin.to_state
+    d.challenge_n, d.prompt_cause, d.retry_used = twin.challenge_n, twin.prompt_cause, twin.retry_used
+    d.stamp = twin.stamp
+    d.public_changed = twin.changed
+    d.reply = twin.reply
+    d.notify = [n for n in d.notify if n.to != "wearer"] + [
+        replace(n, deadline_timer=COVER_OF.get(n.deadline_timer, n.deadline_timer))
+        for n in twin.notify if n.to == "wearer"]
+    visible = [AuditEntry(e.kind, e.detail, False, e.from_state or twin.from_state, e.to_state or twin.to_state)
+               for e in twin.audit if not e.masked]
+    d.audit = visible + [replace(e, masked=True) for e in d.audit if e.masked is not False]
+    d.timers = [t for t in d.timers if t.kind != SESSION_END_DUE]
+    for t in twin.timers:
+        if t.kind in COVER_OF:
+            d.timers.append(replace(t, kind=COVER_OF[t.kind]))
+        elif t.kind == SESSION_END_DUE:
+            d.timers.append(t)
+    if twin.cancel_state_timers or twin.cancel_all_timers:
+        d.cancel_kinds += list(COVER_TIMER_KINDS)
+    if twin.cancel_all_timers:
+        d.cancel_kinds.append(SESSION_END_DUE)
+
+
 # --- entry point ------------------------------------------------------------
 def decide(snap: Snapshot, ev: Event, choose: Optional[Chooser] = None) -> Decision:
     choose = choose or _secure_choice
     d = _base(snap, ev)
     if snap.state == ENDED:
         return _finish(snap, d)
+    _dispatch(snap, ev, d, choose)
+    open_after, masked_after, _ = _alert_after(snap, d)
+    if open_after and masked_after:
+        if not is_masked(snap):
+            # This decision opens the mask: the twin is the same session taking the OK action.
+            _cover(snap, d, decide(snap, _ok_event(snap, ev), choose), opening=True)
+        elif ev.kind in COVER_EVENTS:
+            twin = _twin_snapshot(snap)
+            _cover(snap, d, decide(twin, _ok_event(twin, ev), choose), opening=False)
+    return _finish(snap, d)
+
+
+def _dispatch(snap: Snapshot, ev: Event, d: Decision, choose: Chooser) -> None:
     k = ev.kind
     if k == PULL_FORWARD:
         _on_pull_forward(snap, ev, d, choose)
@@ -846,9 +929,10 @@ def decide(snap: Snapshot, ev: Event, choose: Optional[Chooser] = None) -> Decis
         _on_lost_contact_notify(snap, d)
     elif k == LINK_RESTORED:
         _on_link_restored(snap, d)
+    elif k in COVER_TIMER_KINDS:
+        d.reply = "ignored"  # the twin answers these while a masked alert is open
     else:
         raise ValueError(f"unknown event {k!r}")
-    return _finish(snap, d)
 
 
 def _alert_after(snap: Snapshot, d: Decision) -> tuple[bool, bool, Optional[str]]:
@@ -870,9 +954,19 @@ def _alert_after(snap: Snapshot, d: Decision) -> tuple[bool, bool, Optional[str]
 def _finish(snap: Snapshot, d: Decision) -> Decision:
     open_after, masked_after, kind_after = _alert_after(snap, d)
     d.alert_open_after, d.alert_masked_after, d.alert_kind_after = open_after, masked_after, kind_after
-    if not (open_after and masked_after):
-        d.public_state = d.to_state
     hide = open_after and masked_after
+    if not hide:
+        d.public_state = d.to_state
+        d.public_changed = d.changed
+    elif not d.cover:
+        if is_alerting(snap.public_state):
+            # The cover escalated earlier: it follows the ladder like the twin would.
+            d.public_state = d.to_state
+            d.public_changed = d.changed
+        else:
+            # An event the wearer cannot see: her cover prompt stays exactly as it was.
+            d.challenge_n, d.prompt_cause, d.retry_used = snap.challenge_n, snap.prompt_cause, snap.retry_used
+            d.public_changed = False
     d.audit = [
         e if e.masked is not None else AuditEntry(e.kind, e.detail, hide, e.from_state, e.to_state)
         for e in d.audit

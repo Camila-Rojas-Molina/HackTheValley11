@@ -68,3 +68,74 @@ async def test_false_alarm_entry_is_identical_for_real_and_duress_pin(client, db
     rd = await client.post(f"/v1/sessions/{duress.session_id}/cancel", json={"pin": DURESS_PIN}, headers=duress.wearer)
     assert rr.content == rd.content
     assert await visible(client, real) == await visible(client, duress)
+
+
+async def advance(db, ctx, sid, seconds: float) -> None:
+    """Move this session's clock forward: pending timers come `seconds` closer, due ones fire."""
+    async with db.connection() as conn:
+        await conn.execute(
+            """UPDATE timers SET fire_at = fire_at - make_interval(secs => %s)
+                WHERE session_id = %s AND fired_at IS NULL AND cancelled_at IS NULL""", (float(seconds), sid))
+        while await timers.fire_one(conn, ctx, session_id=sid) is not None:
+            pass
+
+
+async def device_view(client, w):
+    """Heartbeat as the device sees it; the challenge id is random per world."""
+    hb = (await client.post("/v1/device/heartbeat", headers=w.device(), json={})).json()
+    return hb["state_public"], {**hb["cmd"], "challenge_id": bool(hb["cmd"]["challenge_id"])}
+
+
+async def twin_worlds(client, db, **arm):
+    real, duress = await make_world(client, db, arm=False), await make_world(client, db, arm=False)
+    for w in (real, duress):
+        r = await client.post("/v1/sessions", json={"profile": "demo", **arm}, headers=w.wearer)
+        w.session_id = r.json()["session_id"]
+    return real, duress
+
+
+async def cancel_both(client, real, duress, action="cancel"):
+    rr = await client.post(f"/v1/sessions/{real.session_id}/{action}", json={"pin": PIN}, headers=real.wearer)
+    rd = await client.post(f"/v1/sessions/{duress.session_id}/{action}", json={"pin": DURESS_PIN},
+                           headers=duress.wearer)
+    assert rr.status_code == rd.status_code == 200 and rr.content == rd.content
+    assert (await session_row(client._transport.app.state.db, duress.session_id))["state"] == "ESCALATED_L1"
+
+
+async def test_masked_duress_keeps_the_check_in_schedule(client, db, ctx, first_choice):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress)
+
+    async def same(step):
+        assert await wearer_texts(db, real) == await wearer_texts(db, duress), step
+        assert await device_view(client, real) == await device_view(client, duress), step
+        st_r = (await client.get(f"/v1/sessions/{real.session_id}", headers=real.wearer)).json()
+        st_d = (await client.get(f"/v1/sessions/{duress.session_id}", headers=duress.wearer)).json()
+        assert (st_r["state_public"], st_r["cmd"]["led"]) == (st_d["state_public"], st_d["cmd"]["led"]), step
+
+    for w in (real, duress):
+        await advance(db, ctx, w.session_id, 61)  # one check-in interval
+    assert (await wearer_texts(db, real))[-1] == "Reminder"
+    assert (await device_view(client, real))[0] == states.PROMPTED
+    await same("routine check-in")
+    for w in (real, duress):
+        await advance(db, ctx, w.session_id, 43)  # prompt window + delivery grace
+    assert (await wearer_texts(db, real))[-1] == "Reminder 1"
+    await same("reminder")
+    # The escalation kept running underneath the whole time.
+    assert (await session_row(db, duress.session_id))["state"] in ("ESCALATED_L2", states.FINAL)
+    # Unanswered, the twin escalates; so does the cover (both devices show red).
+    for w in (real, duress):
+        await advance(db, ctx, w.session_id, 43)
+    assert (await device_view(client, real))[1]["led"] == (await device_view(client, duress))[1]["led"] == "red"
+    assert await wearer_texts(db, real) == await wearer_texts(db, duress)
+
+
+async def test_masked_duress_still_asks_home_safe_at_the_preset_end(client, db, ctx, first_choice):
+    real, duress = await twin_worlds(client, db, duration_s=30)
+    await cancel_both(client, real, duress)
+    for w in (real, duress):
+        await advance(db, ctx, w.session_id, 31)
+    assert (await wearer_texts(db, real))[-1] == "Home safe?"
+    assert await wearer_texts(db, real) == await wearer_texts(db, duress)
+    assert await device_view(client, real) == await device_view(client, duress)

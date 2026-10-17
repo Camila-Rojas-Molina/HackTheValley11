@@ -329,12 +329,43 @@ def test_random_walks_hold_every_invariant():
                 if not d.alert_open_after:
                     assert s.alert is not None
                     assert set(n.contact_id for n in contact_msgs) <= set(s.alert.recipients)
-            # Masked alerts keep the public state off the escalation ladder.
+            # Masked alerts keep the public state off the escalation ladder, unless the cover's
+            # own check-in went unanswered (a twin that used the real PIN would escalate too).
             if d.alert_open_after and d.alert_masked_after:
-                assert not is_alerting(d.public_state)
+                assert (not is_alerting(d.public_state) or is_alerting(s.public_state)
+                        or ev.kind == states.COVER_REMINDER_TIMEOUT)
             # FINAL is only ever simulated.
             if d.to_state == FINAL and s.state != FINAL:
                 assert any(e.kind == "emergency_services_simulated" and e.detail["placed"] is False for e in d.audit)
             s = step(s, d)
             if s.state == ENDED:
                 break
+
+
+# --- masked duress: the cover follows a twin -------------------------------------
+def masked_duress(public=ARMED, **kw):
+    a = AlertView(kind=DURESS, level=1, masked=True, recipients=(C1,))
+    return snap("ESCALATED_L1", public_state=public, alert=a, **kw)
+
+
+def test_masked_duress_keeps_the_twins_check_in_schedule():
+    s = masked_duress()
+    d = decide(s, Event(states.COVER_CHECKIN_DUE), first)
+    twin = decide(snap(ARMED), Event(states.CHECKIN_DUE), first)
+    assert _wearer_view(d) == _wearer_view(twin)
+    assert d.to_state == "ESCALATED_L1" and not d.alert_ops and not d.cancel_state_timers
+    assert [n for n in d.notify if n.to == "contact"] == []
+    assert [t.kind for t in d.timers] == [states.COVER_PROMPT_TIMEOUT]
+    # An escalation step underneath leaves the cover prompt exactly as it was.
+    s2 = step(s, d)
+    d2 = decide(s2, Event(states.ACK_TIMEOUT))
+    assert d2.to_state == "ESCALATED_L2" and d2.public_state == PROMPTED
+    assert (d2.challenge_n, d2.prompt_cause) == (s2.challenge_n, s2.prompt_cause) and not d2.public_changed
+    # Without a mask, a cover timer does nothing.
+    assert decide(snap(ARMED), Event(states.COVER_CHECKIN_DUE)).reply == "ignored"
+
+
+def test_masked_duress_session_end_asks_home_safe():
+    d = decide(masked_duress(), Event(states.SESSION_END_DUE), first)
+    assert d.public_state == PROMPTED and d.wearer_templates == ["home_safe"]
+    assert d.to_state == "ESCALATED_L1"
