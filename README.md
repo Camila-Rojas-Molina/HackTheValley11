@@ -351,7 +351,8 @@ imports nothing from the state machine, and the z-score is informational only (t
 | `hr_samples` (from `001`; gains `profile`, default `night_out`) | hypertable, 1-day chunks, existing rows migrated | table |
 | `hr_1m` → `hr_1h` → `hr_1d`, `telemetry_1m` → `telemetry_1h` → `telemetry_1d` | hierarchical continuous aggregates, real-time (`materialized_only = false`), refresh policies | views over the raw rows |
 | `user_zscore_5m` | view; Toolkit `stats_agg` when `timescaledb_toolkit` is installed | view (avg / stddev) |
-| `timeseries_setup` | one row: `mode` (`timescaledb` or `plain`), `zscore_method`, and `note` (why setup took the plain path, if it did) | same |
+| `telemetry_heartbeat_1h` | Toolkit 1.15+ only: hourly real-time continuous aggregate of `heartbeat_agg` over care-profile telemetry, read with `rollup()` + `dead_ranges()` | not created; `GET /v1/telemetry/gaps` uses `lead()` over raw rows |
+| `timeseries_setup` | one row: `mode` (`timescaledb` or `plain`), `zscore_method`, `gaps_method`, and `note` (why setup took the plain path, if it did) | same |
 
 - **Ingest.** `POST /v1/telemetry/batch` takes up to 6000 rows (2 min at 50 Hz) and stores them with one
   `COPY`. Device millisecond counters are mapped onto server time; a repeated `batch_id` is stored once.
@@ -364,7 +365,18 @@ imports nothing from the state machine, and the z-score is informational only (t
   accelerometer): the mean of the last 5 minutes against the user's own 7-day baseline of 1-minute means.
   `z` is null under 30 baseline minutes. `GET /v1/telemetry/zscore` reads it; nothing else does.
 - **Compression.** Raw chunks older than 1 day go to the columnstore, segmented by `user_id, profile` and
-  ordered by `time DESC`.
+  ordered by `time DESC`. The policy runs daily on chunks past the 1-day interval, so a weekend demo
+  compresses nothing on its own: `POST /v1/telemetry/compression-demo` (operator) writes 3 days of SYNTHETIC
+  care-profile telemetry at 1 Hz ending 25 h ago, converts those chunks with `convert_to_columnstore` and
+  returns the bytes from `hypertable_columnstore_stats`. Measured on TimescaleDB 2.30.2 (Docker): telemetry
+  46.1 MB → 4.9 MB (9.4×), heart rate 8.6 MB → 0.25 MB (33.9×). The data is synthetic.
+- **Device gaps.** `GET /v1/telemetry/gaps` lists where the scrunchie sent no care-profile data ("device sent
+  no data", 60 s liveness), from Toolkit `heartbeat_agg` → `dead_ranges` when Toolkit 1.15+ is installed.
+  Read-only: the server's check-in countdown stays the authority.
+- **Query times.** Each senior-mode card carries `query_ms`, the measured time of its own query.
+- **Connections.** A free Tiger service has 25 connections and no pooler. One API process holds at most
+  `DB_POOL_MAX` (default 8) + 1 (Telegram poller lock) + 1 (start-up migration); `GET /v1/telemetry/info`
+  shows the budget next to the server's `max_connections`.
 - **Retention per profile.** TimescaleDB retention policies work per hypertable, so it has two parts:
   - a 30-day chunk retention policy on both raw tables (the `care` limit);
   - `stillhere_retention_job`, scheduled hourly, deletes `night_out` raw rows older than 48 h from both raw
@@ -391,7 +403,8 @@ curl -s "$URL/v1/telemetry/info" -H "X-Admin-Key: $ADMIN_KEY"
 ```
 
 - `info` should show `"mode":"timescaledb"`, the `timescaledb` and `timescaledb_toolkit` versions,
-  `zscore_method` `toolkit_stats_agg`, 2 hypertables, 6 continuous aggregates and 15 jobs.
+  `zscore_method` `toolkit_stats_agg`, `gaps_method` `toolkit_heartbeat_agg`, 2 hypertables, 7 continuous
+  aggregates and 17 jobs (6 and 15 without Toolkit).
 - `POST /v1/telemetry/synthetic` (operator) seeds a labelled 7-day synthetic baseline for the demo wearer.
   Then post live heart rate, and `GET /v1/telemetry/zscore` (wearer key) shows a `baseline_minutes` near
   10,080.
@@ -408,45 +421,52 @@ PostgreSQL 18 with `timescaledb` and `timescaledb_toolkit` enabled; `info` shows
 ## PointClickCare senior mode
 
 A small, separate senior-mode demo on synthetic data (`backend/app/care.py`,
-`backend/app/routes/care.py`, `backend/migrations/003_care.sql`; routes in `docs/API.md` section 9).
-**No real residents.** Every row is labelled synthetic and a CHECK constraint on all three tables
-enforces it. Rule-based change flags only: not a medical device, not clinically validated, and every
-threshold is an untested assumption that each card states.
+`backend/app/routes/care.py`, the `*care*` migrations; routes in `docs/API.md` section 9).
+**No real residents.** Every row is labelled synthetic and CHECK constraints enforce it. Rule-based change
+flags only: not a medical device, not clinically validated, and every threshold is an untested assumption
+that each card states with its source.
 
-- **Synthetic cohort.** `POST /v1/demo/care-seed` (operator) generates 20 residents × 14 days:
-  - 7 with a scripted gradual change;
-  - 13 with no change: 9 stable, 2 with one bad night, 2 whose usual values are naturally high.
+- **Synthetic cohort.** `POST /v1/demo/care-seed` (operator) generates 20 residents × 28 days:
+  - 5 with a scripted change on the last days (heart rate after standing smaller or bigger, restless nights,
+    both together);
+  - 15 with no scored change: stable residents, one bad night, naturally high values, a resident whose record
+    notes a pacemaker (the heart-rate rule is off), and 2 whose sway drifts (shown, never scored).
 
   The script is kept for checking the rules (`GET /v1/care/residents` shows it as `read_by_rules: false`);
   the rules never read it.
-- **Rules.** Fixed code, no model. Each compares the resident's last 48 h with their own first 48 h in the
-  record, never with other residents:
-  - `postural_sway_drift`: quiet-standing sway (accelerometer);
-  - `rise_to_settle_time`: after standing up, the time until balance and heart rate have both settled;
-  - `night_restlessness`: minutes moving at night; both of the last 2 nights must be above their usual,
-    so one bad night scores nothing.
-- **Card.** `score` 0–100 is the sum of the rule points (30 + 40 + 30 at most). `level` is `check today`
-  from 45 points or when any rule reaches its top band, `watch` from 15, otherwise `low` - or
-  `not enough data` when a rule could not score because the device data stopped, so missing data never
-  reads as "continue routine care". Each rule carries `observed`, `baseline`, `unit`, `contribution`
-  and a plain explanation; the card adds a `suggested_check` for a care aide. `GET /v1/care/alerts`
-  lists `watch`, `check today` and `not enough data` cards, `check today` first.
-- **Briefing (Vultr).** After the score and level are fixed, `GET /v1/care/alerts` sends each `watch` /
-  `check today` card's rule findings (no names, no ids) to Vultr Serverless Inference through
-  `app.vultr.abriefing`, the async form of `briefing_text`, so the KAZE timer worker never waits on it.
-  The model only rewords the briefing. Its text is shown only if it passes the wording rules below and
-  every number in it is on the card. Without `VULTR_API_KEY`, on any error or timeout, or when the text is
-  refused, the card keeps the rule template. `briefing_source` says which one is shown.
+- **Baseline.** Rolling: the resident's own 14 days just before the last 48 h, with 7 valid days of warm-up
+  before any rule can score (Skubic 2015; Rispens 2015).
+- **Rules.** Fixed code, no model:
+  - `stand_hr_response`: heart-rate change after standing (mean 60–180 s after minus the 60 s before, when
+    heart rate is available), both of the last 2 days at z ≤ −2.5 or ≥ +2.5; off for non-sinus rhythm or a
+    pacemaker. The check it suggests is lying and standing vitals per the home's protocol.
+  - `night_restlessness`: both of the last 2 nights at z ≥ +2.5, +15% and 15 min above the usual.
+  - Shown greyed out, "experimental, not scored": standing sway and balance settling after standing.
+- **Card.** A 0–100 **change score** (never a risk score) and a level that never follows the score:
+  `worth a look this shift` for one rule; `review this shift` only with 2 different rules in 3 days, or one
+  rule plus a synthetic medication change in the last 30 days (which never starts an alert alone). Data
+  quality (hours worn, gaps, heart rate available or not), the suggested check, the line "Pattern change
+  only - not a medical assessment." and Useful / Not useful / Already known / Snooze 3 days buttons.
+- **Alert budget.** At most 1 push per resident per 24 h; an identical alert is muted for 3 days unless it
+  gets worse; everything else goes to the shift-start digest (`GET /v1/care/digest`).
+- **Tiger Data.** Each card shows `query_ms`, the measured time of its own query.
+- **Briefing (Vultr).** After the score and level are fixed, `GET /v1/care/alerts` sends each flagged card's
+  rule findings (no names, no ids) to Vultr Serverless Inference through `app.vultr.abriefing`, so the KAZE
+  timer worker never waits on it. The model only rewords the briefing. Its text is shown only if it passes
+  the wording rules below and every number in it is on the card. Without `VULTR_API_KEY`, on any error or
+  timeout, or when the text is refused, the card keeps the rule template. `briefing_source` says which.
 - **Wording.** Cards restate measurements against the resident's own baseline. They never name a
-  condition, never say what will happen or how soon, and claim no sensor beyond motion and heart rate.
-  `tests/test_care_wording.py` checks every card for 8 seeds, the live HTTP responses and the care source
-  files; `tests/test_care_vultr.py` checks that model text breaking any of these rules is refused.
+  condition, never say what will happen or how soon, never call the number a risk, and claim no sensor
+  beyond motion and heart rate. `tests/test_care_wording.py` checks every card for 8 seeds, the live HTTP
+  responses and the care source files; `tests/test_care_vultr.py` checks that model text breaking any of
+  these rules is refused.
 - **Kept apart from KAZE.** The care code imports only `app.care`, `app.security` and `app.vultr`, and
-  no KAZE module imports it; only `main.py` registers its router (`tests/test_care_isolation.py`). Seeding and reading change no KAZE table
-  (`tests/test_care_db.py`).
-- **Results with the default seed (11).** All 7 scripted changes are flagged (6 `check today`, 1 `watch`)
-  and none of the 13 no-change residents are. A 200-seed sweep test holds this for every seed. The data
-  were tuned for these rules; real recordings will be noisier, and the 48 h baseline is short.
+  no KAZE module imports it; only `main.py` registers its router (`tests/test_care_isolation.py`). Seeding
+  and reading change no KAZE table (`tests/test_care_db.py`).
+- **Results with the default seed (11).** All 5 scripted changes are flagged (2 `review this shift`, one of
+  them raised by medication context, and 3 `worth a look this shift`) and none of the 15 no-change residents
+  are. A 200-seed sweep test holds this for every seed. The data were tuned for these rules; real recordings
+  will be noisier.
 
 ```bash
 op /v1/demo/care-seed '{"end_day":"2026-10-16"}'

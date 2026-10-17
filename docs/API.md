@@ -757,76 +757,106 @@ if unknown), `days` (≤ 7, default 7), `until_minutes_ago` (default 5), `profil
 
 ## 9. Senior mode (PointClickCare, synthetic)
 
-Twenty synthetic residents × 14 days, scored by fixed rules against each resident's own baseline. Separate
-from KAZE: these routes import nothing on the check-in path and write only the `care_*` tables. Every row,
-card and response is labelled synthetic; every threshold is an untested assumption, and every card says so.
+Twenty synthetic residents × 28 days, scored by fixed rules against each resident's own rolling baseline.
+Separate from KAZE: these routes import nothing on the check-in path and write only the `care_*` tables.
+Every row, card and response is labelled synthetic; every threshold is an untested assumption with its
+source on the card. Pattern change only: the cards never name a condition and never look ahead.
 
 ### `POST /v1/demo/care-seed`
 
-`X-Admin-Key`. Replaces the cohort (20 residents × 14 days ending `end_day`, default yesterday UTC) and
+`X-Admin-Key`. Replaces the cohort (20 residents × 28 days ending `end_day`, default yesterday UTC) and
 scores it. Body optional: `{"seed": 11, "end_day": "2026-10-16"}`.
 
 ```json
-{"ok":true,"synthetic":true,"seed":11,"as_of":"2026-10-16","residents":20,"days":14,"rows":280,
- "levels":{"low":13,"watch":1,"check today":6,"not enough data":0},"scripted_change":{"residents":7,"flagged":7},
- "no_change_scripts":{"residents":13,"flagged":0},
+{"ok":true,"synthetic":true,"seed":11,"as_of":"2026-10-16","residents":20,"days":28,"rows":560,
+ "levels":{"low":15,"worth a look this shift":3,"review this shift":2,"not enough data":0},
+ "scripted_change":{"residents":5,"flagged":5},"no_change_scripts":{"residents":15,"flagged":0},
  "notice":"Hackathon prototype. Synthetic data only; no real residents. Rule-based change flags, not a medical device and not clinically validated. Thresholds are untested assumptions."}
 ```
 
 ### `GET /v1/care/residents`
 
-Every resident with their latest score and level. `script` is the generator's ground truth, shown for
-checking the rules; the rules never read it (`read_by_rules: false`). Before any seed, `residents` is empty
-and `hint` names the seed endpoint.
+Every resident with their latest change score and level. `script` is the generator's ground truth, shown
+for checking the rules; the rules never read it (`read_by_rules: false`). Before any seed, `residents` is
+empty and `hint` names the seed endpoint.
 
 ```json
 {"synthetic":true,"notice":"Hackathon prototype. …","as_of":"2026-10-16","residents":[
- {"resident_id":"R-02","display_name":"Synthetic resident R-02","synthetic":true,"days_of_data":14,"as_of":"2026-10-16",
-  "score":30,"level":"check today","script":{"name":"sway_drift","note":"Standing sway rises 5% of usual a day from day 5.",
-  "expected":"flag","read_by_rules":false}}, "…"]}
+ {"resident_id":"R-05","display_name":"Synthetic resident R-05","synthetic":true,"days_of_data":28,"as_of":"2026-10-16",
+  "score":55,"level":"worth a look this shift","script":{"name":"hr_response_flatter",
+  "note":"Heart rate rises about 12 bpm less than usual after standing on the last 2 days.","expected":"flag",
+  "read_by_rules":false}}, "…"]}
 ```
 
 ### `GET /v1/care/alerts`
 
-The latest cards at `watch`, `check today` or `not enough data`: `check today` first, then `watch`, then
-`not enough data`, then by score. `?include_low=true` returns all 20.
+The latest flagged cards: `review this shift` first, then `worth a look this shift`, then `not enough data`,
+then by change score. `?include_low=true` returns all 20.
+
+**Rules** (scored; each compares the resident with their own 14 days just before the last 48 h, and needs 7
+valid days in that baseline before it can score):
+
+- `stand_hr_response`, heart-rate change after standing (when available): per stand-up, mean heart rate
+  60–180 s after standing minus the 60 s before; the daily median over stand-ups that had heart rate (3+ a
+  day). Both of the last 2 days at z ≤ −2.5 or ≥ +2.5 in the same direction (SD at least 2 bpm). Off for a
+  resident whose record notes non-sinus rhythm or a pacemaker. Heart rate alone cannot show blood pressure,
+  so the suggested check is lying and standing vitals per the home's protocol.
+- `night_restlessness`: minutes moving at night. Both of the last 2 nights at z ≥ +2.5, at least +15% and at
+  least 15 min above the usual (one bad night scores nothing).
+
+Points follow the smaller z of the 2 days: 2.5 SD gives 30 / 25, 4 SD gives the maximum 55 / 45.
+**Experimental, not scored** (shown greyed out): `postural_sway_drift` and `settle_balance` (sway is not
+validated from a wrist or hair tie, and traditional sway measures were not linked to the outcome in 738 older
+adults).
+
+**Levels** never follow the score: `worth a look this shift` when one rule fires today (even at its top
+band); `review this shift` only when 2 different rules fired in the last 3 days, one of them today; a
+medication start or change in the last 30 days (antihypertensive or an AGS Beers 2023 class) raises a
+`worth a look` card one level and never starts one; `low` otherwise, or `not enough data` when nothing fired
+and a rule could not score.
+
+**Delivery:** at most 1 push per resident per 24 h; an identical alert (same level and rules) is muted for
+3 days unless it gets worse; the rest goes to the shift-start digest (`GET /v1/care/digest`).
 
 | Card field | Meaning |
 |---|---|
-| `score` | 0–100, the sum of the rule contributions (30 + 40 + 30 at most) |
-| `level` | `check today` from 45 points or when any rule reaches its top band; `watch` from 15; else `low`, or `not enough data` when a rule could not score (its `suggested_check` says which device data is missing) |
-| `rules[]` | `rule, observed, baseline, unit, contribution, explanation`, plus `label, scored, top_band, threshold, change_pct, recent_values, baseline_values, max_contribution, threshold_status` |
+| `score`, `score_label`, `score_note` | the 0–100 change score: the sum of today's rule points (55 + 45 at most). It ranks change from the resident's own usual; it is not a risk score and does not set the level |
+| `level` | see above |
+| `rules[]` | `rule, label, status (scored / not enough data / off), observed, baseline, baseline_sd, z, unit, contribution, max_contribution, explanation, threshold, threshold_status, source, recent_values, baseline_values, baseline_days` |
+| `experimental[]` | greyed-out signals: `signal, label, status: "experimental, not scored", observed, baseline, change_pct, note` |
+| `fired_last_3_days` | each rule that fired in the last 3 days, with the dates |
+| `data_quality` | `hours_worn_last_48h`, `gaps` (dates with no data), `heart_rate` (`available on N of 16 days` or `not available`), `days_present`, `all_rules_scored` |
+| `record_context`, `priority_raised_by` | synthetic medication starts or changes in the last 30 days, and whether they raised the level |
 | `suggested_check` | what a care aide does next |
-| `briefing` | plain-language summary of the card |
-| `briefing_source` | `vultr` when Vultr Serverless Inference worded the briefing, else `template` |
+| `pattern_note` | "Pattern change only - not a medical assessment." |
+| `actions`, `feedback_url` | the Useful / Not useful / Already known / Snooze 3 days buttons (flagged cards only) |
+| `delivery` | `{channel: "push" / "digest" / null, reason}` |
+| `briefing`, `briefing_source` | plain-language summary with the detail in the message itself; `vultr` when Vultr worded it, else `template` |
 | `query_ms` | server-side time of this card's own database query (its 28-day `series`), in ms; the response's `timing.list_query_ms` times the card list |
 | `series` | the resident's last 28 days: `days`, `night_restless_min`, `stand_hr_delta_bpm`, `wear_hours` (usual vs now) |
 
-The rules: `postural_sway_drift` (quiet-standing sway), `rise_to_settle_time` (time after standing up until
-balance and heart rate have both settled) and `night_restlessness` (both of the last 2 nights above their
-usual). Each compares the last 48 h with the resident's first 48 h in the record.
-
 The briefing is written after the score and level are fixed and cannot change them. With `VULTR_API_KEY`
-set, each `watch` / `check today` card's briefing is reworded by Vultr (section 11); `low` and `not enough data`
-cards are not sent.
-The text is shown only if it passes the wording rules and every number in it is on the card; otherwise,
-and with no key, the card keeps the rule template. Shortened card:
+set, each flagged card's briefing is reworded by Vultr (section 11); `low` and `not enough data` cards are
+not sent. The text is shown only if it passes the wording rules and every number in it is on the card;
+otherwise, and with no key, the card keeps the rule template. Shortened card:
 
 ```json
-{"resident_id":"R-18","display_name":"Synthetic resident R-18","synthetic":true,"as_of":"2026-10-16","score":60,
- "level":"check today",
- "rules":[{"rule":"postural_sway_drift","label":"Standing sway","observed":0.113,"baseline":0.073,"unit":"m/s²",
-           "change_pct":55,"contribution":30,"max_contribution":30,"top_band":true,"scored":true,
-           "explanation":"Standing sway over the last 48 h: 0.113 m/s² vs 0.073 m/s² in their own 48 h baseline (+55%); at or above the +50% band, 30 points.",
-           "threshold":"+20% -> 15, +35% -> 25, +50% -> 30 points; days worn at least 6 h",
-           "threshold_status":"untested assumption","recent_values":[0.109,0.117],"baseline_values":[0.071,0.075]}, "…"],
- "suggested_check":"Ask the nurse to review this resident today. Watch their standing balance during transfers and walks today, with their walking aid within reach; note how they slept and any night-time waking on rounds tonight. Tell the nurse what you see.",
- "briefing":"Synthetic resident R-18: check today, score 60/100 as of 2026-10-16. Standing sway over the last 48 h: … Rule-based flag on synthetic data; not a medical assessment.",
- "briefing_source":"template",
- "method":"deterministic rules against the resident's own baseline; no model","thresholds_status":"untested assumption",
- "recent_window":{"from":"2026-10-15","to":"2026-10-16","hours":48},
- "baseline_window":{"from":"2026-10-03","to":"2026-10-04","hours":48,"note":"their own first 48 h in this 14-day record"},
- "data_quality":{"days_present":4,"days_expected":4,"wear_hours":55.3,"all_rules_scored":true}, "…": "…"}
+{"resident_id":"R-08","display_name":"Synthetic resident R-08","synthetic":true,"as_of":"2026-10-16","score":100,
+ "score_label":"change score (0-100)","level":"review this shift",
+ "rules":[{"rule":"stand_hr_response","label":"Heart-rate change after standing (when available)","status":"scored",
+           "observed":1.4,"baseline":13.7,"baseline_sd":2.0,"z":[-7.0,-5.4],"unit":"bpm","contribution":55,
+           "max_contribution":55,"explanation":"Heart rate rose less than usual after standing (avg +1.4 vs their usual +14 bpm over the 14-day baseline, SD 2.0; z -7.0 and -5.4; 12 and 8 stands with heart rate). Many things can cause this, including medications or watch fit; 55 points.",
+           "threshold_status":"untested assumption","source":"CDC STEADI 2017 (…); Norcliffe-Kaufmann 2018 (…); Falter 2019 (…)"}, "…"],
+ "experimental":[{"signal":"postural_sway_drift","label":"Standing sway (experimental, not scored)",
+                  "status":"experimental, not scored","observed":0.102,"baseline":0.08,"change_pct":27,"contribution":0}, "…"],
+ "fired_last_3_days":{"stand_hr_response":["2026-10-16"],"night_restlessness":["2026-10-16"]},
+ "data_quality":{"hours_worn_last_48h":27.4,"gaps":[],"heart_rate":{"available_days":16,"of_days":16,
+                 "label":"available on 16 of 16 days"},"days_present":16,"days_expected":16,"all_rules_scored":true},
+ "suggested_check":"Ask the nurse to review this resident this shift. If they seem unsteady or dizzy, consider lying and standing vitals per your protocol (lying 5 min; blood pressure and pulse at 1 and 3 min standing); note how they slept and any night-time waking on rounds tonight. Tell the nurse what you see.",
+ "pattern_note":"Pattern change only - not a medical assessment.",
+ "delivery":{"channel":"push","reason":"first alert for this resident in 24 h"},
+ "baseline_window":{"from":"2026-10-01","to":"2026-10-14","days":14,"note":"rolling: their own 14 days just before the last 48 h; …"},
+ "briefing_source":"template","query_ms":0.41, "…": "…"}
 ```
 
 ### `POST /v1/care/alerts/{resident_id}/feedback`
