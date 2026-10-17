@@ -563,3 +563,24 @@ async def test_session_end_during_an_alert_still_asks_home_safe_afterwards(clien
     assert (await session_row(db, w.session_id))["state"] == states.ARMED
     assert await fire(db, ctx, w.session_id, states.SESSION_END_DUE) == "prompted"
     assert [o["text"] for o in await outbox(db, w.session_id, recipient="wearer")][-1] == "Home safe?"
+
+
+async def test_out_of_range_numbers_get_4xx_never_500(client, db, ctx):
+    w = await make_world(client, db, contacts=1)
+    await to_state(client, db, ctx, w, states.PROMPTED)
+    raw = '{"event_id":"b1:880","type":"squeeze","payload":{"pattern":"plain","k":1e999}}'
+    for _ in range(3):  # the device retries the same event
+        r = await client.post("/v1/device/events", content=raw,
+                              headers={**w.device(), "Content-Type": "application/json"})
+        assert r.status_code == 422, r.text
+    r = await client.post("/v1/device/events", headers=w.device(),
+                          json={"event_id": "b1:881", "type": "squeeze", "payload": {}, "device_ms": 2 ** 63})
+    assert r.status_code == 422
+    dev = {"Authorization": f"Bearer {w.device_key}", "X-Device-Id": w.device_id}
+    r = await client.post("/v1/hr", headers=dev, json={"source": "x", "samples": [{"bpm": 70, "rr_ms": [1e39]}]})
+    assert r.status_code == 422
+    # "I'm OK" with a nonsense accuracy still counts: the accuracy is dropped, not the check-in.
+    r = await client.post(f"/v1/sessions/{w.session_id}/checkin", headers=w.wearer,
+                          json={"lat": 43.7, "lon": -79.4, "accuracy_m": 1e39})
+    assert r.status_code == 200 and r.json()["state_public"] == states.ARMED
+    assert (await session_row(db, w.session_id))["state"] == states.ARMED

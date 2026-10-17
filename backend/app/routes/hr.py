@@ -12,7 +12,7 @@ from __future__ import annotations
 import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Union
+from typing import Annotated, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -36,11 +36,15 @@ async def hr_bridge_page():
                         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
+# BLE Heart Rate Service RR intervals are uint16 in 1/1024 s: at most 64 s.
+RrMs = Annotated[float, Field(ge=0, le=65535)]
+
+
 class HrSample(BaseModel):
     t: Optional[Union[float, str]] = None
     ts: Optional[Union[float, str]] = None
     bpm: int = Field(ge=20, le=250)
-    rr_ms: Optional[list[float]] = None
+    rr_ms: Optional[list[RrMs]] = None
     rr_synthetic: Optional[bool] = None
 
 
@@ -52,7 +56,7 @@ class HrIn(BaseModel):
     ts: Optional[Union[float, str]] = None
     t: Optional[Union[float, str]] = None
     bpm: Optional[int] = Field(default=None, ge=20, le=250)
-    rr_ms: Optional[list[float]] = None
+    rr_ms: Optional[list[RrMs]] = None
     rr_synthetic: Optional[bool] = None
 
 

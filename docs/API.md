@@ -133,6 +133,8 @@ heartbeat after a `LOST_CONTACT` restores the link and tells the contacts who we
 | `head_position_change`, `fall_like`, `offbody` | any object (not read) | `ARMED` → `PROMPTED` with a counted challenge, at most once per cooldown (60 s demo, 15 min real). |
 | `prompt_shown` | `{}` | Lowers the prompt deadline to "shown + window". |
 
+`device_ms` is 0 to 2^53 − 1, and payload numbers must be finite; otherwise `422` (the event is not stored).
+
 Reply: `{cmd, ok, result, state_public}`. `result` is `noted`, `retry`, `prompted`, `ignored`, `cooldown`,
 `deadline_set` or `no_session`.
 
@@ -173,7 +175,7 @@ credential (`403` otherwise).
 
 or a single sample: `{"ts": "2026-10-17T07:33:53Z", "bpm": 72, "source": "apple_watch_heartcast", "simulated": false}`.
 
-- `bpm` 20–250; up to 600 samples per call.
+- `bpm` 20–250; up to 600 samples per call. Each `rr_ms` value is 0–65535 (the BLE Heart Rate Service range); otherwise `422`.
 - `t`/`ts` is epoch seconds, epoch milliseconds or ISO 8601. A missing time, or one more than 5 min from server time, becomes server time.
 - `rr_synthetic: true` marks RR intervals that are just 60000/bpm. They are stored; RMSSD is not computed.
 
@@ -240,7 +242,8 @@ Arm a session.
 ### `POST /v1/sessions/{session_id}/checkin`
 
 "I'm OK" from `/me`. Optional `{lat, lon, accuracy_m}` refreshes the last-known location, which is released
-to contacts only when an alert opens.
+to contacts only when an alert opens. An `accuracy_m` that is not a number from 0 to 1 000 000 is dropped; the
+check-in still counts.
 
 ```json
 {"lat": 43.7845, "lon": -79.1867, "accuracy_m": 25}

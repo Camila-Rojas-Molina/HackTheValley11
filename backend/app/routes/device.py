@@ -8,10 +8,11 @@ Replies only ever carry the public state; a duress alert reads ARMED.
 from __future__ import annotations
 
 import json
+import math
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import engine, rules, states
 from ..deps import canonical_json, get_ctx, get_db, require_device
@@ -28,11 +29,29 @@ class HeartbeatIn(BaseModel):
     feats: Optional[list] = None
 
 
+def _finite(value) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_finite(v) for v in value.values())
+    if isinstance(value, list):
+        return all(_finite(v) for v in value)
+    return True
+
+
 class EventIn(BaseModel):
     event_id: str = Field(min_length=1, max_length=80)
     type: Literal["squeeze", "head_position_change", "offbody", "prompt_shown", "fall_like"]
     payload: dict = Field(default_factory=dict)
-    device_ms: Optional[int] = None
+    device_ms: Optional[int] = Field(default=None, ge=0, le=2 ** 53 - 1)
+
+    @field_validator("payload")
+    @classmethod
+    def _payload_is_storable(cls, v: dict) -> dict:
+        # 1e999 parses as infinity, which JSON (and jsonb) cannot hold: reject it here (422).
+        if not _finite(v):
+            raise ValueError("payload numbers must be finite")
+        return v
 
 
 def _int_header(request: Request, name: str) -> Optional[int]:

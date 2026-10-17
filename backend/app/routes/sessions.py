@@ -6,11 +6,12 @@ duress entries stay hidden until the alert is resolved.
 """
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import audit, engine, messages, states, timeseries
 from ..config import PRESETS
@@ -33,7 +34,17 @@ class ArmIn(BaseModel):
 class CheckinIn(BaseModel):
     lat: Optional[float] = Field(default=None, ge=-90, le=90)
     lon: Optional[float] = Field(default=None, ge=-180, le=180)
-    accuracy_m: Optional[float] = Field(default=None, ge=0)
+    accuracy_m: Optional[float] = None
+
+    @field_validator("accuracy_m", mode="before")
+    @classmethod
+    def _plausible_accuracy(cls, v):
+        # An unusable accuracy is dropped; it must never cost her the "I'm OK".
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) and 0 <= f <= 1_000_000 else None
 
 
 class PinIn(BaseModel):

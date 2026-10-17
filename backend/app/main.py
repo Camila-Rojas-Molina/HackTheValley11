@@ -14,7 +14,11 @@ import re
 from contextlib import asynccontextmanager
 from typing import Optional
 
+import math
+
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg import OperationalError
 from psycopg_pool import PoolTimeout
@@ -52,6 +56,16 @@ class RedactTokens(logging.Filter):
         elif isinstance(record.msg, str):
             record.msg = _TOKEN_PATH.sub(r"\1***", record.msg)
         return True
+
+
+def _json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _redact_access_log() -> None:
@@ -135,6 +149,12 @@ def create_app(settings: Optional[Settings] = None, *, start_workers: Optional[b
     @app.exception_handler(OperationalError)
     async def _db_down(request: Request, exc: OperationalError):
         return JSONResponse({"ok": False, "error": "database unavailable"}, status_code=503)
+
+    @app.exception_handler(RequestValidationError)
+    async def _invalid(request: Request, exc: RequestValidationError):
+        # FastAPI's own 422 echoes the input, and an input like 1e999 (infinity) cannot be
+        # written as JSON: that turned a bad request into a 500.
+        return JSONResponse({"detail": _json_safe(jsonable_encoder(exc.errors()))}, status_code=422)
 
     app.include_router(telemetry.router)
     for r in (health.router, device.router, hr.router, sessions.router, contacts.router, demo.router):
