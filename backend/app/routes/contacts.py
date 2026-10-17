@@ -7,6 +7,9 @@ Wearer side (bearer wearer key):
   PUT    /v1/contacts/{id}/duress   {eligible}: choose who may receive a duress alert. With none
                                     chosen, every approved contact can (research 1.15)
   DELETE /v1/contacts/{id}          silent: the contact is not told
+  DELETE /v1/contacts               remove every contact in one action, silently (research 1.15;
+                                    Apple Safety Check's emergency reset). An open alert keeps
+                                    escalating: with nobody left it reaches the simulated FINAL.
 Contact side (capability token; cannot arm, see session status or ask for location):
   GET  /c/{token}                       consent / live page
   GET  /v1/contact/{token}/invite       consent screen: wearer name and contact number (410 if not valid)
@@ -161,6 +164,26 @@ async def set_duress_recipient(request: Request, contact_id: int, body: DuressIn
                                kind="contact_duress_recipient", user_id=user["id"],
                                detail={"contact_id": contact_id, "eligible": body.eligible})
     return {"ok": True, "contact_id": contact_id, "duress_eligible": body.eligible}
+
+
+@router.delete("/v1/contacts")
+async def revoke_all(request: Request):
+    db = get_db(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            rows = await (await conn.execute(
+                """UPDATE contacts SET revoked_at = now(), web_token_hash = NULL
+                    WHERE user_id = %s AND revoked_at IS NULL RETURNING id""", (user["id"],))).fetchall()
+            ids = [r["id"] for r in rows]
+            if ids:
+                # Silent: nothing is sent to anyone, and nothing still queued for them goes out.
+                await conn.execute(
+                    """UPDATE outbox SET status = 'failed', last_error = 'contact removed'
+                        WHERE contact_id = ANY(%s) AND status = 'pending'""", (ids,))
+            await audit.append(conn, chain_key=audit.user_chain(user["id"]), actor="wearer",
+                               kind="contacts_removed_all", user_id=user["id"], detail={"removed": len(ids)})
+    return {"ok": True, "removed": len(ids)}
 
 
 @router.delete("/v1/contacts/{contact_id}")

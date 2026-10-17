@@ -415,6 +415,16 @@ Contacts cannot add themselves; only the wearer approves. `404` if the contact h
 
 Silent removal: the contact is not told, and their pending messages are dropped. Reply `{"ok": true}`.
 
+### `DELETE /v1/contacts`
+
+Wearer key. Removes every contact (approved, pending and invited) in one action, silently, like Apple
+Safety Check's emergency reset: nobody is told and nothing still queued for them is sent. An open alert is
+not stood down: with nobody left, the ladder reaches the simulated FINAL step (no call is placed).
+
+```json
+{"ok": true, "removed": 3}
+```
+
 ## 6. Contacts
 
 The contact's capability token comes from `join`. Before an alert a contact sees nothing about the
