@@ -96,7 +96,8 @@ ALL_EVENTS = (
 SENSOR_EVENTS = frozenset({PULL_FORWARD})
 RESOLVING_EVENTS = frozenset({CONTACT_SAFE, PIN_REAL, END_REAL})
 # Wearer-facing events that a masked session answers through its twin.
-COVER_EVENTS = frozenset(COVER_TIMER_KINDS) | {SESSION_END_DUE, PULL_FORWARD, SQUEEZE, WEARER_OK}
+COVER_EVENTS = frozenset(COVER_TIMER_KINDS) | {SESSION_END_DUE, PULL_FORWARD, SQUEEZE, WEARER_OK,
+                                                PIN_REAL, PIN_DURESS, END_REAL, END_DURESS}
 
 # Timers tied to the current state carry expected_version and are cancelled on
 # every transition. Independent timers survive transitions (cover timers are
@@ -587,12 +588,10 @@ def _on_pin_real(snap: Snapshot, d: Decision, end: bool) -> None:
             _back_to_armed(snap, d)
     elif is_alerting(s):
         if snap.alert is not None and snap.alert.kind == DURESS:
-            # A real PIN never closes a duress alert; only "she's safe" does.
+            # A real PIN never closes a duress alert; only "she's safe" does. While it is
+            # masked, what the wearer sees comes from the twin (see _cover).
             for c in _recipients(snap):
                 d.notify.append(Notify("contact", "duress_pin_note", contact_id=c))
-            if snap.alert.masked:
-                d.public_state = target_public
-                d.audit.append(_pin_entry(snap, action, target_public))
             d.audit.append(AuditEntry("real_pin_on_duress", {"action": action}, masked=True))
         else:
             d.audit.append(_pin_entry(snap, action, target_public))
@@ -606,7 +605,6 @@ def _on_pin_real(snap: Snapshot, d: Decision, end: bool) -> None:
 def _on_pin_duress(snap: Snapshot, d: Decision, end: bool) -> None:
     s = snap.state
     action, reply, wearer_t = ("end", "ended", "ended") if end else ("cancel", "cancelled", "cancelled")
-    cover_public = ENDED if end else ARMED
     if s in PRE_ALERT:
         # Wearer-facing output comes from the twin (the real PIN): see _cover().
         d.audit.append(AuditEntry("duress", {"via": "pin", "action": action}, masked=True))
@@ -616,9 +614,6 @@ def _on_pin_duress(snap: Snapshot, d: Decision, end: bool) -> None:
         if alert is not None and alert.kind == DURESS:
             for c in _recipients(snap):
                 d.notify.append(Notify("contact", "alert_duress", contact_id=c, buttons="alert"))
-            if alert.masked:
-                d.public_state = cover_public
-                d.audit.append(_pin_entry(snap, action, cover_public))
             d.audit.append(AuditEntry("duress", {"via": "pin", "action": action}, masked=True))
         else:
             # The real PIN would close this alert as a false alarm. Mask instead: escalation

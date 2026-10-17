@@ -236,3 +236,21 @@ async def test_after_a_duress_end_wearer_input_gets_no_wearer_message(client, db
     assert [t.split(" Timeline")[0] for t in await wearer_texts(db, real)] == \
            [t.split(" Timeline")[0] for t in await wearer_texts(db, duress)] == ["Ended ✓"]
     assert await visible(client, real) == await visible(client, duress)
+
+
+@pytest.mark.parametrize("action", ["cancel", "end"])
+@pytest.mark.parametrize("pin", [PIN, DURESS_PIN])
+async def test_a_pin_after_a_duress_end_answers_like_an_ended_session(client, db, ctx, action, pin):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress, action="end")
+    rr = await client.post(f"/v1/sessions/{real.session_id}/{action}", json={"pin": pin}, headers=real.wearer)
+    rd = await client.post(f"/v1/sessions/{duress.session_id}/{action}", json={"pin": pin}, headers=duress.wearer)
+    assert rr.status_code == rd.status_code == 200 and rr.content == rd.content
+    assert rr.json()["state_public"] == states.ENDED
+    for w in (real, duress):
+        st = (await client.get(f"/v1/sessions/{w.session_id}", headers=w.wearer)).json()
+        assert st["state_public"] == states.ENDED
+    assert [t.split(" Timeline")[0] for t in await wearer_texts(db, real)] == \
+           [t.split(" Timeline")[0] for t in await wearer_texts(db, duress)]
+    assert await visible(client, real) == await visible(client, duress)
+    assert (await session_row(db, duress.session_id))["state"].startswith("ESCALATED_")
