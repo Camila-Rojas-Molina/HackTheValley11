@@ -1,0 +1,31 @@
+{
+  "job_id": "6f1c2a9e-3b7d-4c55-9a0e-2d8f4b1e7c30",
+  "kind": "physics",
+  "status": "queued",
+  "scan_id": "myel018-L1-d273",
+  "patient_id": "demo-a",
+  "run_id": "0b9e5d6c-8a41-4f2e-b3c7-5e1d9a2f6c48",
+  "params": {
+    "scan_id": "myel018-L1-d273",
+    "level": "L1",
+    "baseline_scan_id": "myel018-L1-d0",
+    "mask_source": "expert",
+    "lesion_models": [
+      "weak_bone",
+      "void"
+    ],
+    "load_n": 800.0,
+    "voxel_mm": 1.0
+  },
+  "result": null,
+  "error": null,
+  "attempts": 0,
+  "runner": null,
+  "device": null,
+  "created_at": "2026-10-17T20:45:00Z",
+  "started_at": null,
+  "finished_at": null,
+  "seconds": null,
+  "cost_usd": null,
+  "cost": null
+}

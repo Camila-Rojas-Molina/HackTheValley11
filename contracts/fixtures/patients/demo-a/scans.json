@@ -1,0 +1,29 @@
+{
+  "patient_id": "demo-a",
+  "scans": [
+    {
+      "scan_id": "myel018-L1-d0",
+      "patient_id": "demo-a",
+      "level": "L1",
+      "day": 0,
+      "time": "2026-01-17T00:00:00Z",
+      "label": "Day 0",
+      "provenance": "real_scan",
+      "simulated": false,
+      "status": "pending",
+      "has_strain": false
+    },
+    {
+      "scan_id": "myel018-L1-d273",
+      "patient_id": "demo-a",
+      "level": "L1",
+      "day": 273,
+      "time": "2026-10-17T00:00:00Z",
+      "label": "Day 273",
+      "provenance": "real_scan",
+      "simulated": false,
+      "status": "ready",
+      "has_strain": false
+    }
+  ]
+}

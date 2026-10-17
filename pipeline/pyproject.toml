@@ -1,0 +1,26 @@
+# rb_pipeline: the RainbowBone pipeline package (C7, contracts/pipeline.md). S0 owns this file; stage
+# dependencies live in per-stream files (pipeline/requirements-{io,seg,physics}.txt, S2/S3), installed into
+# each worktree's .venv by scripts/bootstrap.sh.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rb-pipeline"
+version = "0.1.0"
+description = "RainbowBone pipeline: ingest, Bone Finder masks, calibration, physics and export (stubs until G1)"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["rb_pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--strict-markers"
+markers = [
+    "unit: no data files and no network",
+    "pipeline: reads RB_DATA_DIR or demo/ files",
+    "slow: longer than a few seconds",
+]

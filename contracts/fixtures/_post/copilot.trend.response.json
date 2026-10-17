@@ -1,0 +1,30 @@
+{
+  "answer": "L1 lesion volume: 0.00 cm³ on Day 0 and 3.24 cm³ on Day 273. Both points are from real scans.",
+  "refused": false,
+  "tool_calls": [
+    {
+      "tool": "get_metric_series",
+      "args": {
+        "site": "L1",
+        "metric": "lesion_volume_cm3"
+      },
+      "rows": 2
+    }
+  ],
+  "mentions_simulated": false,
+  "source": "template",
+  "model": null,
+  "verified": true,
+  "numbers_matched": 3,
+  "numbers_total": 3,
+  "footer": "Computed from public, de-identified research data. For review by the care team. Research prototype, not for clinical use.",
+  "attempts": [
+    {
+      "provider": "template",
+      "model": null,
+      "ms": 0.0,
+      "outcome": "accepted",
+      "reason": null
+    }
+  ]
+}

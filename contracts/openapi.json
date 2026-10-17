@@ -1,0 +1,5036 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RainbowBone API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Service and database status",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database down (same body shape)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/patients": {
+      "get": {
+        "tags": [
+          "patients"
+        ],
+        "summary": "Care-team list with the deterministic flag",
+        "operationId": "list_patients",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatientList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/patients/{patient_id}": {
+      "get": {
+        "tags": [
+          "patients"
+        ],
+        "summary": "One patient",
+        "operationId": "get_patient",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatientDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/patients/{patient_id}/scans": {
+      "get": {
+        "tags": [
+          "patients"
+        ],
+        "summary": "Scans of one patient, real and simulated",
+        "operationId": "list_patient_scans",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/patients/{patient_id}/levels": {
+      "get": {
+        "tags": [
+          "patients"
+        ],
+        "summary": "T11-L5 ladder with raw and aggregate query_ms",
+        "operationId": "get_patient_levels",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LevelLadder"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/patients/{patient_id}/series": {
+      "get": {
+        "tags": [
+          "patients"
+        ],
+        "summary": "One metric over time; points carry provenance and filled",
+        "operationId": "get_patient_series",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "T11",
+                "T12",
+                "L1",
+                "L2",
+                "L3",
+                "L4",
+                "L5",
+                "left_femur",
+                "right_femur"
+              ],
+              "type": "string",
+              "title": "Site"
+            }
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "lesion_volume_cm3",
+                "vertebra_volume_cm3",
+                "body_volume_cm3",
+                "stiffness_change_axial_pct",
+                "stiffness_change_bending_pct",
+                "lesion_share_pts",
+                "background_change_pct",
+                "strain_ratio",
+                "modulus_lesion_gpa"
+              ],
+              "type": "string",
+              "title": "Metric"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Series"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scans": {
+      "post": {
+        "tags": [
+          "scans"
+        ],
+        "summary": "Upload a CT (.nii.gz), admin",
+        "operationId": "upload_scan",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "title": "Day"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanUploadAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Admin-Key missing or wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "over the upload size cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ADMIN_KEY unset, or the database is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-admin": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/gzip": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scans/{scan_id}": {
+      "get": {
+        "tags": [
+          "scans"
+        ],
+        "summary": "Scan manifest: assets, colour scales, metrics, calibration, mask sources",
+        "operationId": "get_scan",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManifest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scans/{scan_id}/assets/{name}": {
+      "get": {
+        "tags": [
+          "scans"
+        ],
+        "summary": "One asset file named in the manifest",
+        "operationId": "get_scan_asset",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "file bytes; media type per contracts/formats.md",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scans/{scan_id}/runs": {
+      "post": {
+        "tags": [
+          "scans"
+        ],
+        "summary": "Queue segment/physics/summarize jobs, admin",
+        "operationId": "start_scan_run",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Admin-Key missing or wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ADMIN_KEY unset, or the database is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-admin": true
+      }
+    },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Job status, seconds, cost",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scans/{scan_id}/summary": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Care-team summary with provider badge",
+        "operationId": "get_scan_summary",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Generation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scans/{scan_id}/summary/regenerate": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Outage drill: rerun the chain with an override, admin",
+        "operationId": "regenerate_scan_summary",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegenerateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Generation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "X-Admin-Key missing or wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ADMIN_KEY unset, or the database is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-admin": true
+      }
+    },
+    "/api/v1/scans/{scan_id}/explanation": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Patient explanation with reading grade",
+        "operationId": "get_scan_explanation",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Explanation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alerts/{alert_id}/feedback": {
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Useful / Not useful / Snooze",
+        "operationId": "post_alert_feedback",
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertFeedbackAck"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/copilot": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Care-Team Copilot over read-only tools",
+        "operationId": "post_copilot",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopilotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CopilotAnswer"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "lands in a later milestone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotAvailable"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tiger/info": {
+      "get": {
+        "tags": [
+          "tiger"
+        ],
+        "summary": "Hypertables, continuous aggregates, columnstore bytes, db size",
+        "operationId": "get_tiger_info",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TigerInfo"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit/{scan_id}": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Hash-chained audit trail of one scan",
+        "operationId": "get_audit_trail",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditTrail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Acquisition": {
+        "properties": {
+          "acquisition_id": {
+            "type": "string",
+            "title": "Acquisition Id"
+          },
+          "dataset_case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Case"
+          },
+          "series_instance_uid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Instance Uid"
+          },
+          "series_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Description"
+          },
+          "modality": {
+            "type": "string",
+            "const": "CT",
+            "title": "Modality",
+            "default": "CT"
+          },
+          "kvp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kvp"
+          },
+          "source_shape": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Shape"
+          },
+          "source_spacing_mm": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Spacing Mm"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "acquisition_id",
+          "dataset_case",
+          "series_instance_uid",
+          "series_description",
+          "kvp"
+        ],
+        "title": "Acquisition"
+      },
+      "AlertFeedbackAck": {
+        "properties": {
+          "feedback_id": {
+            "type": "integer",
+            "title": "Feedback Id"
+          },
+          "alert_id": {
+            "type": "string",
+            "title": "Alert Id"
+          },
+          "feedback": {
+            "type": "string",
+            "enum": [
+              "useful",
+              "not_useful",
+              "snooze"
+            ],
+            "title": "Feedback"
+          },
+          "snooze_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snooze Until"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "feedback_id",
+          "alert_id",
+          "feedback",
+          "snooze_until",
+          "recorded_at"
+        ],
+        "title": "AlertFeedbackAck"
+      },
+      "AlertFeedbackRequest": {
+        "properties": {
+          "feedback": {
+            "type": "string",
+            "enum": [
+              "useful",
+              "not_useful",
+              "snooze"
+            ],
+            "title": "Feedback"
+          },
+          "snooze_hours": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 168.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snooze Hours",
+            "description": "snooze only; default 24"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 280
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "feedback"
+        ],
+        "title": "AlertFeedbackRequest"
+      },
+      "Asset": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ct",
+              "mask_vertebra",
+              "mask_body",
+              "mask_lesion",
+              "strain_volume",
+              "strain_surface",
+              "context_mesh",
+              "surface_vtp",
+              "volume_vti",
+              "stl",
+              "metrics_json"
+            ],
+            "title": "Kind"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "/api/v1/scans/{scan_id}/assets/{name}"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expert",
+                  "ai",
+                  "mock"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant",
+            "description": "mask source, or mock"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "strain_min_principal_ue",
+                  "strain_max_principal_ue",
+                  "vonmises_mpa",
+                  "rigidity_ratio"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "simulation",
+              "mock",
+              "pending"
+            ],
+            "title": "Basis"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "real_scan",
+              "synthetic_insilico",
+              "synthetic_metric_interp"
+            ],
+            "title": "Provenance"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "pending"
+            ],
+            "title": "Status"
+          },
+          "available_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M2",
+                  "M3",
+                  "M4",
+                  "M5",
+                  "M6",
+                  "M7",
+                  "M8",
+                  "M9-1",
+                  "M9-2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available In"
+          },
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "url",
+          "media_type",
+          "basis",
+          "provenance",
+          "status"
+        ],
+        "title": "Asset"
+      },
+      "Attempt": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "gemini",
+              "groq",
+              "vultr",
+              "local",
+              "template"
+            ],
+            "title": "Provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "ms": {
+            "type": "number",
+            "title": "Ms"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "rejected",
+              "error",
+              "unavailable",
+              "cooldown",
+              "skipped"
+            ],
+            "title": "Outcome"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "ms",
+          "outcome"
+        ],
+        "title": "Attempt"
+      },
+      "AuditEntry": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "seed_demo",
+              "upload",
+              "ingest",
+              "calibrate",
+              "register",
+              "segment",
+              "physics",
+              "store",
+              "summarize",
+              "regenerate",
+              "feedback",
+              "synth_series"
+            ],
+            "title": "Action"
+          },
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          },
+          "prev_hash": {
+            "type": "string",
+            "title": "Prev Hash"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "seq",
+          "at",
+          "actor",
+          "action",
+          "patient_id",
+          "scan_id",
+          "run_id",
+          "detail",
+          "prev_hash",
+          "hash"
+        ],
+        "title": "AuditEntry"
+      },
+      "AuditTrail": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "chain_key": {
+            "type": "string",
+            "title": "Chain Key"
+          },
+          "chain_ok": {
+            "type": "boolean",
+            "title": "Chain Ok"
+          },
+          "head": {
+            "type": "string",
+            "title": "Head"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scan_id",
+          "chain_key",
+          "chain_ok",
+          "head",
+          "entries"
+        ],
+        "title": "AuditTrail"
+      },
+      "CaggInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "hypertable": {
+            "type": "string",
+            "title": "Hypertable"
+          },
+          "bucket": {
+            "type": "string",
+            "title": "Bucket"
+          },
+          "group_by": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Group By"
+          },
+          "materialized_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialized Only"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "hypertable",
+          "bucket",
+          "group_by",
+          "materialized_only"
+        ],
+        "title": "CaggInfo"
+      },
+      "Calibration": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "phantomless_fat_air",
+              "phantomless_air_fat_muscle"
+            ],
+            "title": "Method"
+          },
+          "slope": {
+            "type": "number",
+            "title": "Slope"
+          },
+          "intercept": {
+            "type": "number",
+            "title": "Intercept"
+          },
+          "slope_sd": {
+            "type": "number",
+            "title": "Slope Sd"
+          },
+          "peaks_hu": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "propertyNames": {
+              "enum": [
+                "air",
+                "fat",
+                "muscle"
+              ]
+            },
+            "type": "object",
+            "title": "Peaks Hu"
+          },
+          "reference": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "propertyNames": {
+              "enum": [
+                "air",
+                "fat",
+                "muscle"
+              ]
+            },
+            "type": "object",
+            "title": "Reference",
+            "description": "reference density values the peaks are fitted to, with units in `reference_unit`"
+          },
+          "reference_unit": {
+            "type": "string",
+            "title": "Reference Unit"
+          },
+          "roi": {
+            "type": "string",
+            "title": "Roi",
+            "description": "where on the full scan the peaks were taken"
+          },
+          "fit_r2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fit R2"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "labels.json calibration.label"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "method",
+          "slope",
+          "intercept",
+          "slope_sd",
+          "peaks_hu",
+          "reference",
+          "reference_unit",
+          "roi",
+          "label"
+        ],
+        "title": "Calibration"
+      },
+      "ColorScale": {
+        "properties": {
+          "layer": {
+            "type": "string",
+            "enum": [
+              "ct",
+              "mask_vertebra",
+              "mask_body",
+              "mask_lesion",
+              "strain_min_principal_ue",
+              "strain_max_principal_ue",
+              "vonmises_mpa",
+              "rigidity_ratio"
+            ],
+            "title": "Layer"
+          },
+          "colormap": {
+            "type": "string",
+            "enum": [
+              "gray",
+              "red",
+              "green",
+              "blue",
+              "turbo",
+              "viridis"
+            ],
+            "title": "Colormap"
+          },
+          "cal_min": {
+            "type": "number",
+            "title": "Cal Min"
+          },
+          "cal_max": {
+            "type": "number",
+            "title": "Cal Max"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pct",
+                  "pts",
+                  "cm3",
+                  "gpa",
+                  "mpa",
+                  "ue",
+                  "ratio",
+                  "dice"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "display": {
+            "type": "string",
+            "enum": [
+              "window",
+              "label",
+              "magnitude",
+              "signed"
+            ],
+            "title": "Display"
+          },
+          "opacity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "scan",
+              "patient_level"
+            ],
+            "title": "Scope",
+            "description": "patient_level: identical for every timepoint of this patient and level"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "simulation",
+              "mock",
+              "pending"
+            ],
+            "title": "Basis"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "layer",
+          "colormap",
+          "cal_min",
+          "cal_max",
+          "unit",
+          "display",
+          "opacity",
+          "scope",
+          "basis"
+        ],
+        "title": "ColorScale"
+      },
+      "CopilotAnswer": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "refused": {
+            "type": "boolean",
+            "title": "Refused"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCall"
+            },
+            "type": "array",
+            "title": "Tool Calls"
+          },
+          "mentions_simulated": {
+            "type": "boolean",
+            "title": "Mentions Simulated"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "gemini",
+              "groq",
+              "vultr",
+              "local",
+              "template"
+            ],
+            "title": "Source"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "numbers_matched": {
+            "type": "integer",
+            "title": "Numbers Matched"
+          },
+          "numbers_total": {
+            "type": "integer",
+            "title": "Numbers Total"
+          },
+          "footer": {
+            "type": "string",
+            "title": "Footer"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/Attempt"
+            },
+            "type": "array",
+            "title": "Attempts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "answer",
+          "refused",
+          "tool_calls",
+          "mentions_simulated",
+          "source",
+          "model",
+          "verified",
+          "numbers_matched",
+          "numbers_total",
+          "footer",
+          "attempts"
+        ],
+        "title": "CopilotAnswer"
+      },
+      "CopilotRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Question"
+          },
+          "patient_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "title": "Patient Id",
+            "description": "from the UI session; never chosen by a model"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question",
+          "patient_id"
+        ],
+        "title": "CopilotRequest"
+      },
+      "CostBreakdown": {
+        "properties": {
+          "compute_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compute Seconds"
+          },
+          "compute_usd_per_hour": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compute Usd Per Hour"
+          },
+          "gpu_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Seconds"
+          },
+          "gpu_usd_per_hour": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Usd Per Hour"
+          },
+          "tokens_in": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens In"
+          },
+          "tokens_out": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Out"
+          },
+          "token_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Usd"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "compute_seconds",
+          "compute_usd_per_hour",
+          "gpu_seconds",
+          "gpu_usd_per_hour",
+          "tokens_in",
+          "tokens_out",
+          "token_usd"
+        ],
+        "title": "CostBreakdown"
+      },
+      "DataQuality": {
+        "properties": {
+          "mask_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expert",
+                  "ai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mask Source"
+          },
+          "lesion_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "expert"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lesion Source"
+          },
+          "calibration_range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Range"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "real_scan",
+              "synthetic_insilico",
+              "synthetic_metric_interp"
+            ],
+            "title": "Provenance"
+          },
+          "simulated": {
+            "type": "boolean",
+            "title": "Simulated"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mask_source",
+          "lesion_source",
+          "calibration_range",
+          "provenance",
+          "simulated"
+        ],
+        "title": "DataQuality"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorDetail"
+      },
+      "Explanation": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "care_team_summary",
+              "patient_explanation"
+            ],
+            "title": "Task"
+          },
+          "text": {
+            "$ref": "#/components/schemas/GeneratedText"
+          },
+          "footer": {
+            "type": "string",
+            "title": "Footer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "gemini",
+              "groq",
+              "vultr",
+              "local",
+              "template"
+            ],
+            "title": "Source"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "numbers_matched": {
+            "type": "integer",
+            "title": "Numbers Matched"
+          },
+          "numbers_total": {
+            "type": "integer",
+            "title": "Numbers Total"
+          },
+          "badge": {
+            "type": "string",
+            "title": "Badge",
+            "description": "labels.json ai.badge rendered, e.g. 'template \u00b7 3/3 numbers match computed values'"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/Attempt"
+            },
+            "type": "array",
+            "title": "Attempts"
+          },
+          "facts_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Facts Sha256"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "cache_hit": {
+            "type": "boolean",
+            "title": "Cache Hit"
+          },
+          "chain_override": {
+            "type": "boolean",
+            "title": "Chain Override"
+          },
+          "tokens_in": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens In"
+          },
+          "tokens_out": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Out"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "reading_grade": {
+            "type": "number",
+            "title": "Reading Grade",
+            "description": "Flesch-Kincaid grade of headline + detail, computed by code"
+          },
+          "reading_grade_formula": {
+            "type": "string",
+            "const": "flesch_kincaid_grade/1",
+            "title": "Reading Grade Formula"
+          },
+          "target_grade_max": {
+            "type": "number",
+            "title": "Target Grade Max"
+          },
+          "review_note": {
+            "type": "string",
+            "title": "Review Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scan_id",
+          "task",
+          "text",
+          "footer",
+          "source",
+          "model",
+          "verified",
+          "numbers_matched",
+          "numbers_total",
+          "badge",
+          "attempts",
+          "facts_sha256",
+          "prompt_version",
+          "generated_at",
+          "cache_hit",
+          "chain_override",
+          "tokens_in",
+          "tokens_out",
+          "cost_usd",
+          "reading_grade",
+          "reading_grade_formula",
+          "target_grade_max",
+          "review_note"
+        ],
+        "title": "Explanation"
+      },
+      "Flag": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "flagged",
+              "not_flagged",
+              "pending"
+            ],
+            "title": "Status"
+          },
+          "rule_version": {
+            "type": "string",
+            "title": "Rule Version"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "T11",
+                  "T12",
+                  "L1",
+                  "L2",
+                  "L3",
+                  "L4",
+                  "L5"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "alert_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alert Id",
+            "description": "set only when status is flagged"
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/FlagCondition"
+            },
+            "type": "array",
+            "title": "Conditions"
+          },
+          "line": {
+            "type": "string",
+            "title": "Line",
+            "description": "deterministic 'Flagged because' / pending / not flagged line, rendered by code from labels.json flag.templates"
+          },
+          "protocol_line": {
+            "type": "string",
+            "title": "Protocol Line"
+          },
+          "data_quality": {
+            "$ref": "#/components/schemas/DataQuality"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "rule_version",
+          "level",
+          "scan_id",
+          "alert_id",
+          "conditions",
+          "line",
+          "protocol_line",
+          "data_quality"
+        ],
+        "title": "Flag"
+      },
+      "FlagCondition": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "lesion_new_or_grew",
+              "lesion_share_at_least",
+              "share_exceeds_calibration_range"
+            ],
+            "title": "Key"
+          },
+          "met": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Met",
+            "description": "null = not evaluated yet"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pct",
+                  "pts",
+                  "cm3",
+                  "gpa",
+                  "mpa",
+                  "ue",
+                  "ratio",
+                  "dice"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "simulation",
+              "mock",
+              "pending"
+            ],
+            "title": "Basis"
+          },
+          "available_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M2",
+                  "M3",
+                  "M4",
+                  "M5",
+                  "M6",
+                  "M7",
+                  "M8",
+                  "M9-1",
+                  "M9-2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available In"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "met",
+          "basis"
+        ],
+        "title": "FlagCondition"
+      },
+      "GeneratedText": {
+        "properties": {
+          "headline": {
+            "type": "string",
+            "title": "Headline"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "numbers_used": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Numbers Used"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "headline",
+          "detail",
+          "numbers_used"
+        ],
+        "title": "GeneratedText"
+      },
+      "Generation": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "care_team_summary",
+              "patient_explanation"
+            ],
+            "title": "Task"
+          },
+          "text": {
+            "$ref": "#/components/schemas/GeneratedText"
+          },
+          "footer": {
+            "type": "string",
+            "title": "Footer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "gemini",
+              "groq",
+              "vultr",
+              "local",
+              "template"
+            ],
+            "title": "Source"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "numbers_matched": {
+            "type": "integer",
+            "title": "Numbers Matched"
+          },
+          "numbers_total": {
+            "type": "integer",
+            "title": "Numbers Total"
+          },
+          "badge": {
+            "type": "string",
+            "title": "Badge",
+            "description": "labels.json ai.badge rendered, e.g. 'template \u00b7 3/3 numbers match computed values'"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/Attempt"
+            },
+            "type": "array",
+            "title": "Attempts"
+          },
+          "facts_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Facts Sha256"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "cache_hit": {
+            "type": "boolean",
+            "title": "Cache Hit"
+          },
+          "chain_override": {
+            "type": "boolean",
+            "title": "Chain Override"
+          },
+          "tokens_in": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens In"
+          },
+          "tokens_out": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Out"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scan_id",
+          "task",
+          "text",
+          "footer",
+          "source",
+          "model",
+          "verified",
+          "numbers_matched",
+          "numbers_total",
+          "badge",
+          "attempts",
+          "facts_sha256",
+          "prompt_version",
+          "generated_at",
+          "cache_hit",
+          "chain_override",
+          "tokens_in",
+          "tokens_out",
+          "cost_usd"
+        ],
+        "title": "Generation",
+        "description": "Chain.run(...) result as served: GET summary and the regenerate drill."
+      },
+      "Grid": {
+        "properties": {
+          "shape": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Shape"
+          },
+          "spacing_mm": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Spacing Mm"
+          },
+          "affine": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Affine",
+            "description": "4x4 voxel-to-NIfTI-world-mm, row-major"
+          },
+          "margin_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Mm"
+          },
+          "dtype": {
+            "type": "string",
+            "const": "int16",
+            "title": "Dtype"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "shape",
+          "spacing_mm",
+          "affine",
+          "margin_mm",
+          "dtype"
+        ],
+        "title": "Grid"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Health": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "down"
+            ],
+            "title": "Status"
+          },
+          "db": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "down"
+            ],
+            "title": "Db"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "description": "CONTRACT_VERSION"
+          },
+          "labels_version": {
+            "type": "string",
+            "title": "Labels Version"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Time"
+          },
+          "timescaledb": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timescaledb",
+            "description": "null when the DB is down"
+          },
+          "ai_chain": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "gemini",
+                "groq",
+                "vultr",
+                "local",
+                "template"
+              ]
+            },
+            "type": "array",
+            "title": "Ai Chain"
+          },
+          "queue": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue",
+            "description": "job counts; X-Admin-Key only"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "db",
+          "version",
+          "labels_version",
+          "ai_chain"
+        ],
+        "title": "Health"
+      },
+      "HypertableInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "chunk_interval": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Interval"
+          },
+          "chunks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunks"
+          },
+          "compressed_chunks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compressed Chunks"
+          },
+          "rows_estimate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rows Estimate"
+          },
+          "before_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Bytes"
+          },
+          "after_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "chunk_interval",
+          "chunks",
+          "compressed_chunks",
+          "rows_estimate",
+          "before_bytes",
+          "after_bytes"
+        ],
+        "title": "HypertableInfo"
+      },
+      "Job": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "segment",
+              "physics",
+              "summarize",
+              "synth_series"
+            ],
+            "title": "Kind"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "runner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner",
+            "description": "e.g. vultr-vhf-4c-16gb-yto, vultr-a16, mac-dev"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "cpu",
+                  "mps",
+                  "cuda"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBreakdown"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "kind",
+          "status",
+          "scan_id",
+          "patient_id",
+          "run_id",
+          "params",
+          "result",
+          "error",
+          "attempts",
+          "runner",
+          "device",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "seconds",
+          "cost_usd",
+          "cost"
+        ],
+        "title": "Job"
+      },
+      "JobRef": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "segment",
+              "physics",
+              "summarize",
+              "synth_series"
+            ],
+            "title": "Kind"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "kind",
+          "status"
+        ],
+        "title": "JobRef"
+      },
+      "LevelLadder": {
+        "properties": {
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "baseline_scan_day": {
+            "type": "integer",
+            "title": "Baseline Scan Day"
+          },
+          "followup_scan_day": {
+            "type": "integer",
+            "title": "Followup Scan Day"
+          },
+          "statistic": {
+            "type": "string",
+            "enum": [
+              "central80_mean",
+              "weakest_5mm"
+            ],
+            "title": "Statistic"
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/LevelRow"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "aggregate",
+              "fixture"
+            ],
+            "title": "Source"
+          },
+          "query_ms": {
+            "$ref": "#/components/schemas/QueryTiming"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patient_id",
+          "baseline_scan_day",
+          "followup_scan_day",
+          "statistic",
+          "levels",
+          "source",
+          "query_ms"
+        ],
+        "title": "LevelLadder"
+      },
+      "LevelRow": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "T11",
+              "T12",
+              "L1",
+              "L2",
+              "L3",
+              "L4",
+              "L5"
+            ],
+            "title": "Level"
+          },
+          "baseline": {
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            },
+            "type": "array",
+            "title": "Baseline",
+            "description": "values on the baseline scan (Day 0)"
+          },
+          "followup": {
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            },
+            "type": "array",
+            "title": "Followup",
+            "description": "values on the follow-up scan"
+          },
+          "change": {
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            },
+            "type": "array",
+            "title": "Change",
+            "description": "X, Y and background for this level"
+          },
+          "excluded": {
+            "type": "boolean",
+            "title": "Excluded",
+            "default": false
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "level",
+          "baseline",
+          "followup",
+          "change"
+        ],
+        "title": "LevelRow"
+      },
+      "MaskSources": {
+        "properties": {
+          "vertebra": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expert",
+                  "ai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertebra"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expert",
+                  "ai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "lesion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "expert"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lesion"
+          },
+          "body_split_method": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "vertebrae_body",
+                  "geometric_cut"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Split Method"
+          },
+          "caption": {
+            "type": "string",
+            "title": "Caption"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vertebra",
+          "body",
+          "lesion",
+          "body_split_method",
+          "caption"
+        ],
+        "title": "MaskSources"
+      },
+      "Metric": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "stiffness_change_axial_pct",
+              "stiffness_change_bending_pct",
+              "lesion_share_pts",
+              "background_change_pct",
+              "strain_ratio",
+              "strain_p99_lesion_ue",
+              "vonmises_p99_mpa",
+              "lesion_volume_cm3",
+              "vertebra_volume_cm3",
+              "body_volume_cm3",
+              "lesion_pct_of_body",
+              "lesion_pct_of_vertebra",
+              "modulus_lesion_gpa",
+              "modulus_ref_gpa",
+              "dice_ai_vs_expert"
+            ],
+            "title": "Key"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "null exactly when basis is pending"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "pct",
+              "pts",
+              "cm3",
+              "gpa",
+              "mpa",
+              "ue",
+              "ratio",
+              "dice"
+            ],
+            "title": "Unit"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "simulation",
+              "mock",
+              "pending"
+            ],
+            "title": "Basis"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "real_scan",
+              "synthetic_insilico",
+              "synthetic_metric_interp"
+            ],
+            "title": "Provenance"
+          },
+          "available_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M2",
+                  "M3",
+                  "M4",
+                  "M5",
+                  "M6",
+                  "M7",
+                  "M8",
+                  "M9-1",
+                  "M9-2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available In",
+            "description": "required when basis is pending"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Range"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "grid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "original",
+                  "crop_1mm"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grid",
+            "description": "required for every volume metric"
+          },
+          "mask_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expert",
+                  "ai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mask Source"
+          },
+          "lesion_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "weak_bone",
+                  "void"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lesion Model"
+          },
+          "statistic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "central80_mean",
+                  "weakest_5mm"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statistic"
+          },
+          "compared_to_scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compared To Scan Id",
+            "description": "baseline scan for a change metric"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "value",
+          "unit",
+          "basis",
+          "provenance"
+        ],
+        "title": "Metric"
+      },
+      "NotAvailable": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "available_in": {
+            "type": "string",
+            "enum": [
+              "M2",
+              "M3",
+              "M4",
+              "M5",
+              "M6",
+              "M7",
+              "M8",
+              "M9-1",
+              "M9-2"
+            ],
+            "title": "Available In"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail",
+          "available_in"
+        ],
+        "title": "NotAvailable"
+      },
+      "PatientDetail": {
+        "properties": {
+          "patient_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "title": "Patient Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "dataset": {
+            "type": "string",
+            "title": "Dataset"
+          },
+          "dataset_case": {
+            "type": "string",
+            "title": "Dataset Case"
+          },
+          "latest_scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Scan Id"
+          },
+          "latest_day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Day"
+          },
+          "scan_count": {
+            "type": "integer",
+            "title": "Scan Count"
+          },
+          "flag": {
+            "$ref": "#/components/schemas/Flag"
+          },
+          "scans": {
+            "items": {
+              "$ref": "#/components/schemas/ScanRef"
+            },
+            "type": "array",
+            "title": "Scans"
+          },
+          "sites": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "T11",
+                "T12",
+                "L1",
+                "L2",
+                "L3",
+                "L4",
+                "L5",
+                "left_femur",
+                "right_femur"
+              ]
+            },
+            "type": "array",
+            "title": "Sites"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patient_id",
+          "label",
+          "dataset",
+          "dataset_case",
+          "latest_scan_id",
+          "latest_day",
+          "scan_count",
+          "flag",
+          "scans",
+          "sites"
+        ],
+        "title": "PatientDetail"
+      },
+      "PatientList": {
+        "properties": {
+          "patients": {
+            "items": {
+              "$ref": "#/components/schemas/PatientListItem"
+            },
+            "type": "array",
+            "title": "Patients"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patients"
+        ],
+        "title": "PatientList"
+      },
+      "PatientListItem": {
+        "properties": {
+          "patient_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "title": "Patient Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "dataset": {
+            "type": "string",
+            "title": "Dataset"
+          },
+          "dataset_case": {
+            "type": "string",
+            "title": "Dataset Case"
+          },
+          "latest_scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Scan Id"
+          },
+          "latest_day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Day"
+          },
+          "scan_count": {
+            "type": "integer",
+            "title": "Scan Count"
+          },
+          "flag": {
+            "$ref": "#/components/schemas/Flag"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patient_id",
+          "label",
+          "dataset",
+          "dataset_case",
+          "latest_scan_id",
+          "latest_day",
+          "scan_count",
+          "flag"
+        ],
+        "title": "PatientListItem"
+      },
+      "QueryTiming": {
+        "properties": {
+          "raw_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Ms"
+          },
+          "aggregate_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregate Ms"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "QueryTiming"
+      },
+      "Range": {
+        "properties": {
+          "low": {
+            "type": "number",
+            "title": "Low"
+          },
+          "high": {
+            "type": "number",
+            "title": "High"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "calibration",
+              "lesion_model",
+              "statistic"
+            ],
+            "title": "Kind",
+            "description": "calibration: slope perturbed by its measured uncertainty; lesion_model: weak bone vs void; statistic: central-80% mean vs weakest 5 mm window"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "low",
+          "high",
+          "kind"
+        ],
+        "title": "Range"
+      },
+      "RegenerateRequest": {
+        "properties": {
+          "chain": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "gemini",
+                "groq",
+                "vultr",
+                "local",
+                "template"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Chain",
+            "description": "e.g. ['groq','vultr','template']; template is appended if missing"
+          },
+          "bypass_cache": {
+            "type": "boolean",
+            "title": "Bypass Cache",
+            "default": true
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "care_team_summary",
+              "patient_explanation"
+            ],
+            "title": "Task",
+            "default": "care_team_summary"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "chain"
+        ],
+        "title": "RegenerateRequest"
+      },
+      "Registration": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_registered",
+              "registered"
+            ],
+            "title": "Status"
+          },
+          "fixed_scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Scan Id"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "available_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M2",
+                  "M3",
+                  "M4",
+                  "M5",
+                  "M6",
+                  "M7",
+                  "M8",
+                  "M9-1",
+                  "M9-2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available In"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "Registration"
+      },
+      "RunAccepted": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobRef"
+            },
+            "type": "array",
+            "title": "Jobs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "scan_id",
+          "jobs"
+        ],
+        "title": "RunAccepted"
+      },
+      "RunRequest": {
+        "properties": {
+          "steps": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "segment",
+                "physics",
+                "summarize"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Steps"
+          },
+          "levels": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "T11",
+                "T12",
+                "L1",
+                "L2",
+                "L3",
+                "L4",
+                "L5"
+              ]
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "mask_source": {
+            "type": "string",
+            "enum": [
+              "expert",
+              "ai"
+            ],
+            "title": "Mask Source",
+            "default": "expert"
+          },
+          "lesion_models": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "weak_bone",
+                "void"
+              ]
+            },
+            "type": "array",
+            "title": "Lesion Models"
+          },
+          "baseline_scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Scan Id"
+          },
+          "load_n": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Load N",
+            "default": 800.0
+          },
+          "voxel_mm": {
+            "type": "number",
+            "enum": [
+              1.0,
+              1.5
+            ],
+            "title": "Voxel Mm",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "steps"
+        ],
+        "title": "RunRequest"
+      },
+      "ScanList": {
+        "properties": {
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "scans": {
+            "items": {
+              "$ref": "#/components/schemas/ScanRef"
+            },
+            "type": "array",
+            "title": "Scans"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patient_id",
+          "scans"
+        ],
+        "title": "ScanList"
+      },
+      "ScanManifest": {
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "rb.manifest/1",
+            "title": "Schema",
+            "default": "rb.manifest/1"
+          },
+          "scan_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-zA-Z0-9-]{0,62}$",
+            "title": "Scan Id"
+          },
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "T11",
+                  "T12",
+                  "L1",
+                  "L2",
+                  "L3",
+                  "L4",
+                  "L5",
+                  "left_femur",
+                  "right_femur"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day"
+          },
+          "time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "real_scan",
+              "synthetic_insilico",
+              "synthetic_metric_interp"
+            ],
+            "title": "Provenance"
+          },
+          "simulated": {
+            "type": "boolean",
+            "title": "Simulated"
+          },
+          "generator_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generator Version"
+          },
+          "anchor_scan_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Anchor Scan Ids",
+            "default": []
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "acquisition": {
+            "$ref": "#/components/schemas/Acquisition"
+          },
+          "grid": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null until the crop exists"
+          },
+          "registration": {
+            "$ref": "#/components/schemas/Registration"
+          },
+          "calibration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Calibration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calibration_available_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M2",
+                  "M3",
+                  "M4",
+                  "M5",
+                  "M6",
+                  "M7",
+                  "M8",
+                  "M9-1",
+                  "M9-2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Available In"
+          },
+          "mask_sources": {
+            "$ref": "#/components/schemas/MaskSources"
+          },
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/Asset"
+            },
+            "type": "array",
+            "title": "Assets"
+          },
+          "color_scales": {
+            "items": {
+              "$ref": "#/components/schemas/ColorScale"
+            },
+            "type": "array",
+            "title": "Color Scales"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            },
+            "type": "array",
+            "title": "Metrics"
+          },
+          "labels_version": {
+            "type": "string",
+            "title": "Labels Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scan_id",
+          "patient_id",
+          "label",
+          "level",
+          "day",
+          "time",
+          "provenance",
+          "simulated",
+          "acquisition",
+          "grid",
+          "registration",
+          "calibration",
+          "mask_sources",
+          "assets",
+          "color_scales",
+          "metrics",
+          "labels_version"
+        ],
+        "title": "ScanManifest"
+      },
+      "ScanRef": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-zA-Z0-9-]{0,62}$",
+            "title": "Scan Id"
+          },
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "T11",
+                  "T12",
+                  "L1",
+                  "L2",
+                  "L3",
+                  "L4",
+                  "L5",
+                  "left_femur",
+                  "right_femur"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day",
+            "description": "days since the patient's baseline scan"
+          },
+          "time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time",
+            "description": "demo calendar; Day 0 = 2026-01-17T00:00:00Z"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "real_scan",
+              "synthetic_insilico",
+              "synthetic_metric_interp"
+            ],
+            "title": "Provenance"
+          },
+          "simulated": {
+            "type": "boolean",
+            "title": "Simulated"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "pending"
+            ],
+            "title": "Status"
+          },
+          "has_strain": {
+            "type": "boolean",
+            "title": "Has Strain"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scan_id",
+          "patient_id",
+          "level",
+          "day",
+          "time",
+          "label",
+          "provenance",
+          "simulated",
+          "status",
+          "has_strain"
+        ],
+        "title": "ScanRef"
+      },
+      "ScanUploadAccepted": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "pending",
+            "title": "Status"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobRef"
+            },
+            "type": "array",
+            "title": "Jobs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scan_id",
+          "patient_id",
+          "status",
+          "jobs"
+        ],
+        "title": "ScanUploadAccepted"
+      },
+      "Series": {
+        "properties": {
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "site": {
+            "type": "string",
+            "enum": [
+              "T11",
+              "T12",
+              "L1",
+              "L2",
+              "L3",
+              "L4",
+              "L5",
+              "left_femur",
+              "right_femur"
+            ],
+            "title": "Site"
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "lesion_volume_cm3",
+              "vertebra_volume_cm3",
+              "body_volume_cm3",
+              "stiffness_change_axial_pct",
+              "stiffness_change_bending_pct",
+              "lesion_share_pts",
+              "background_change_pct",
+              "strain_ratio",
+              "modulus_lesion_gpa"
+            ],
+            "title": "Metric"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "pct",
+              "pts",
+              "cm3",
+              "gpa",
+              "mpa",
+              "ue",
+              "ratio",
+              "dice"
+            ],
+            "title": "Unit"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/SeriesPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "contains_synthetic": {
+            "type": "boolean",
+            "title": "Contains Synthetic"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "aggregate",
+              "fixture"
+            ],
+            "title": "Source"
+          },
+          "query_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Ms"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patient_id",
+          "site",
+          "metric",
+          "unit",
+          "points",
+          "contains_synthetic",
+          "source",
+          "query_ms"
+        ],
+        "title": "Series"
+      },
+      "SeriesPoint": {
+        "properties": {
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Time"
+          },
+          "day": {
+            "type": "integer",
+            "title": "Day"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "simulation",
+              "mock",
+              "pending"
+            ],
+            "title": "Basis"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "real_scan",
+              "synthetic_insilico",
+              "synthetic_metric_interp"
+            ],
+            "title": "Provenance"
+          },
+          "filled": {
+            "type": "boolean",
+            "title": "Filled",
+            "description": "gap-filled at query time (time_bucket_gapfill + locf)"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Id"
+          },
+          "mask_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expert",
+                  "ai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mask Source"
+          },
+          "lesion_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "weak_bone",
+                  "void"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lesion Model"
+          },
+          "available_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M2",
+                  "M3",
+                  "M4",
+                  "M5",
+                  "M6",
+                  "M7",
+                  "M8",
+                  "M9-1",
+                  "M9-2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available In"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "time",
+          "day",
+          "value",
+          "basis",
+          "provenance",
+          "filled",
+          "scan_id"
+        ],
+        "title": "SeriesPoint"
+      },
+      "TigerInfo": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "timescaledb",
+              "postgres"
+            ],
+            "title": "Backend"
+          },
+          "timescaledb_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timescaledb Version"
+          },
+          "hypertables": {
+            "items": {
+              "$ref": "#/components/schemas/HypertableInfo"
+            },
+            "type": "array",
+            "title": "Hypertables"
+          },
+          "continuous_aggregates": {
+            "items": {
+              "$ref": "#/components/schemas/CaggInfo"
+            },
+            "type": "array",
+            "title": "Continuous Aggregates"
+          },
+          "db_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Db Size Bytes"
+          },
+          "db_size_pretty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Db Size Pretty"
+          },
+          "budget_bytes": {
+            "type": "integer",
+            "title": "Budget Bytes",
+            "description": "contracts/db.md total budget"
+          },
+          "query_ms": {
+            "$ref": "#/components/schemas/QueryTiming"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "fixture"
+            ],
+            "title": "Source"
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Measured At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "backend",
+          "timescaledb_version",
+          "hypertables",
+          "continuous_aggregates",
+          "db_size_bytes",
+          "db_size_pretty",
+          "budget_bytes",
+          "query_ms",
+          "source",
+          "measured_at"
+        ],
+        "title": "TigerInfo"
+      },
+      "ToolCall": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "enum": [
+              "list_scans",
+              "get_metric_series",
+              "compare_scans",
+              "get_monthly_trend",
+              "define_term"
+            ],
+            "title": "Tool"
+          },
+          "args": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Args"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tool",
+          "args",
+          "rows"
+        ],
+        "title": "ToolCall"
+      },
+      "Unavailable": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ok",
+            "default": false
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "Unavailable",
+        "description": "503 body from the database exception handlers kept from StillHere."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

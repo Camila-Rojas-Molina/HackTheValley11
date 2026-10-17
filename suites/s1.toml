@@ -1,0 +1,19 @@
+# S1 Web: suites for scripts/test_all.sh (PLAN M1, section 3.1). Paths are relative to the repo root.
+# Each [[suite]] runs `setup`, then every `run` command in order, with `cwd` as the working directory
+# and `env` added to the environment; the first non-zero exit is a FAIL. A missing `requires`
+# command is a SKIP with the reason "<command> not on PATH".
+
+[[suite]]
+name = "web"
+stream = "S1"
+description = "Next.js app: lint, typecheck, production build, then page tests against next start"
+cwd = "web"
+requires = ["node", "npm"]
+env = { NEXT_TELEMETRY_DISABLED = "1" }
+setup = "npm ci --no-audit --no-fund"
+run = [
+  "npm run lint",
+  "npm run typecheck",
+  "npm run build",
+  "npm test",
+]

@@ -1,0 +1,50 @@
+# S4 (API, jobs, Tiger): the suites registered in suites/s4.toml, each run with the exact command written there.
+# No secrets: the database is a throwaway postgres:16 service container with trust auth, and AI_CHAIN is
+# the template (Galit's gate). Push 2 adds the TimescaleDB job.
+name: s4-api
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s4-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      RB_TEST_PG_URI: postgresql://postgres@127.0.0.1:5432/postgres
+      AI_CHAIN: template
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: api/requirements.txt
+      - name: Install (.venv, api/requirements.txt)
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check -r api/requirements.txt
+      - name: unit
+        run: bash -c "$(.venv/bin/python -c 'import tomllib; print(tomllib.load(open("suites/s4.toml", "rb"))["suites"]["unit"]["run"])')"
+      - name: contract
+        run: bash -c "$(.venv/bin/python -c 'import tomllib; print(tomllib.load(open("suites/s4.toml", "rb"))["suites"]["contract"]["run"])')"
+      - name: db
+        run: bash -c "$(.venv/bin/python -c 'import tomllib; print(tomllib.load(open("suites/s4.toml", "rb"))["suites"]["db"]["run"])')"

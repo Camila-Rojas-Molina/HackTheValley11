@@ -1,0 +1,16 @@
+{
+  "steps": [
+    "physics"
+  ],
+  "levels": [
+    "L1"
+  ],
+  "mask_source": "expert",
+  "lesion_models": [
+    "weak_bone",
+    "void"
+  ],
+  "baseline_scan_id": "myel018-L1-d0",
+  "load_n": 800.0,
+  "voxel_mm": 1.0
+}

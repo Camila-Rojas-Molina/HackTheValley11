@@ -1,0 +1,35 @@
+{
+  "patient_id": "demo-a",
+  "site": "L1",
+  "metric": "stiffness_change_axial_pct",
+  "unit": "pct",
+  "points": [
+    {
+      "time": "2026-01-17T00:00:00Z",
+      "day": 0,
+      "value": null,
+      "basis": "pending",
+      "provenance": "real_scan",
+      "filled": false,
+      "scan_id": "myel018-L1-d0",
+      "mask_source": "expert",
+      "lesion_model": null,
+      "available_in": "M5"
+    },
+    {
+      "time": "2026-10-17T00:00:00Z",
+      "day": 273,
+      "value": null,
+      "basis": "pending",
+      "provenance": "real_scan",
+      "filled": false,
+      "scan_id": "myel018-L1-d273",
+      "mask_source": "expert",
+      "lesion_model": null,
+      "available_in": "M5"
+    }
+  ],
+  "contains_synthetic": false,
+  "source": "fixture",
+  "query_ms": null
+}

@@ -1,0 +1,12 @@
+{
+  "status": "down",
+  "db": "down",
+  "version": "1.0.0",
+  "labels_version": "1",
+  "server_time": null,
+  "timescaledb": null,
+  "ai_chain": [
+    "template"
+  ],
+  "queue": null
+}

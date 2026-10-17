@@ -1,0 +1,163 @@
+{
+  "version": "1",
+  "about": "C6. Single source for every tile label, unit, badge, disclaimer, the flag rule, the protocol line and the banned wording. Read by the web UI, the docs/wording lint (tests/repo) and the AI checker (api/app/ai/contract.py). Galit reviews this file in M1. Change it only through S0, as a contract commit.",
+
+  "status_line": "Research prototype on public, de-identified data. Not a medical device. Not for clinical use or diagnosis.",
+  "attribution": {
+    "short": "Data: Nohel et al. 2026, Spinal-Multiple-Myeloma-SEG, TCIA, DOI 10.7937/k4qv-hh78, CC BY 4.0.",
+    "full": "Nohel M, Válek V, Rohan T, Štork M, Jakubíček R, Chmelík J, Dostál M (2026). Spinal-Multiple-Myeloma-SEG (Version 1). The Cancer Imaging Archive. DOI 10.7937/k4qv-hh78. Licensed CC BY 4.0.",
+    "segmentation": "Bone Finder: TotalSegmentator, Wasserthal et al. 2023, DOI 10.1148/ryai.230024 (Apache-2.0)."
+  },
+  "headline_statement": "Estimates how much stiffness the vertebra lost since an earlier scan, and how much of that the lesion accounts for. Adapted from CT rigidity analysis; not validated.",
+
+  "units": {"pct": "%", "pts": "points", "cm3": "cm³", "gpa": "GPa", "mpa": "MPa", "ue": "µε", "ratio": "×", "dice": "Dice"},
+  "basis_badges": {"measured": "measured", "simulation": "simulation", "mock": "MOCK", "pending": "pending ({available_in})"},
+  "provenance_badges": {"real_scan": null, "synthetic_insilico": "SIMULATED", "synthetic_metric_interp": "SIMULATED", "filled": "SIMULATED"},
+  "grid_labels": {"original": "original scan grid", "crop_1mm": "1 mm crop"},
+  "mask_labels": {"expert": "dataset radiologist-corrected mask", "ai": "AI mask (TotalSegmentator)"},
+  "lesion_model_labels": {"weak_bone": "lesion as weak bone", "void": "lesion as void"},
+  "statistic_labels": {"central80_mean": "mean of central 80% of slices", "weakest_5mm": "weakest 5 mm window"},
+  "not_available_no_lesion_segmenter": "not available: no lesion segmenter",
+
+  "tiles": [
+    {"key": "headline", "metrics": ["stiffness_change_axial_pct", "lesion_share_pts"],
+     "label": "{level} stiffness change since Day {day_a}: {x}% (range {a}–{b}%) · the new lesion accounts for {y} points",
+     "sub_label": "Adapted from CTRA; the published method compares with the other side in the same scan. Vertebral body, mean of central slices. Not validated.",
+     "pending_label": "{level} stiffness change since Day {day_a}: pending FE ({available_in})"},
+    {"key": "background", "metrics": ["background_change_pct"],
+     "label": "Same period, whole spine: T11–L5 ladder",
+     "sub_label": "Diffuse bone loss across the spine, measured the same way"},
+    {"key": "ai_vs_expert", "metrics": ["stiffness_change_axial_pct"],
+     "label": "Stiffness change from AI mask {ai}% · from expert mask {expert}%",
+     "sub_label": "AI vertebra masks agreed with radiologist-corrected masks: Dice 0.95, 6 vertebrae, 1 scan"},
+    {"key": "strain", "metrics": ["strain_ratio"],
+     "label": "Compressive strain in the lesion region: {ratio}× Day {day_a} (simulation)",
+     "sub_label": "Linear FE, 800 N axial on the vertebral body; unvalidated"},
+    {"key": "lesion_volume", "metrics": ["lesion_volume_cm3"],
+     "label": "Lesion volume",
+     "value_label": "{value} cm³ ({grid_label}; {mask_label})",
+     "sub_label": "Phantomless calibration, adapted; unvalidated on spine"},
+    {"key": "vertebra_volume", "metrics": ["vertebra_volume_cm3"],
+     "label": "Vertebra volume (incl. lesion)", "value_label": "{value} cm³ ({grid_label})"},
+    {"key": "lesion_pct", "metrics": ["lesion_pct_of_body", "lesion_pct_of_vertebra"],
+     "label": "Lesion % of body", "alt_label": "Lesion % of vertebra"},
+    {"key": "modulus", "metrics": ["modulus_lesion_gpa", "modulus_ref_gpa"],
+     "label": "Estimated modulus, lesion vs reference (GPa), weak-bone / void",
+     "sub_label": "Phantomless calibration, adapted; unvalidated on spine"},
+    {"key": "vonmises", "metrics": ["vonmises_p99_mpa"], "optional": true,
+     "label": "Von Mises stress, p99 (MPa)", "sub_label": "Display only"},
+    {"key": "femur_rigidity", "metrics": [], "milestone": "M9-2",
+     "label": "Rigidity loss vs the other femur: {value}%", "reference_line_pct": 35,
+     "sub_label": "Research threshold (Damron 2016)"}
+  ],
+
+  "viewer": {
+    "lesion_outline_caption": "outline: dataset radiologist-corrected mask",
+    "not_registered": "not yet registered (M5)",
+    "strain_legend": "Compressive strain (µε)",
+    "mock_suffix": " · MOCK",
+    "phantom_label": "Synthetic phantom · mock strain field",
+    "segmentation_badge": "outlines: dataset radiologist-corrected masks · Bone Finder in M5",
+    "heatmap_caption": "The heat map is simulated compressive strain under a load. It shows where the bone works hardest, not a prediction.",
+    "offline_badge": "offline · fixtures",
+    "simulated_badge": "SIMULATED",
+    "timeline_legend": "Illustrative growth simulated from real scans A and B, not patient data",
+    "day_label": "Day {day}"
+  },
+  "calibration": {
+    "label": "phantomless, adapted from a leg-region method (Eggermont 2019), unvalidated on spine",
+    "range_label": "calibration range {a}–{b}%"
+  },
+
+  "flag": {
+    "rule": {
+      "version": "flag/1",
+      "levels": ["T11", "T12", "L1", "L2", "L3", "L4", "L5"],
+      "compare": "the two latest real scans of the patient",
+      "lesion_new_or_grew": "lesion volume at the level is new (0 on the earlier scan) or grew by at least growth_pct_min",
+      "growth_pct_min": null,
+      "lesion_share_pts_min": null,
+      "share_exceeds_calibration_range": "lesion_share_pts > (calib_high_pct - calib_low_pct)",
+      "defaults_status": "growth_pct_min (G) and lesion_share_pts_min (S) are set by the care team; Galit proposes defaults after R1. While either is null the flag cannot fire and reads pending.",
+      "simulated_points_never_flag": true
+    },
+    "templates": {
+      "flagged": "Flagged because: {change} at {level} ({vol_a} → {vol_b} cm³) and it accounts for {share} points of {level}'s stiffness loss.",
+      "not_flagged": "Not flagged: {reason}.",
+      "pending": "Not yet evaluated: {change} at {level} ({vol_a} → {vol_b} cm³); its share of {level}'s stiffness change is pending FE ({available_in}).",
+      "change_words": {"new": "new lesion", "grew": "lesion grew"},
+      "data_quality": "Data: {mask_label}; calibration range {calib_low}–{calib_high}%; {provenance_label}."
+    },
+    "protocol_line": "Review at the next huddle; confirm the mobility and fall-precaution plan; notify the attending physician, per your facility's protocol.",
+    "feedback_buttons": {"useful": "Useful", "not_useful": "Not useful", "snooze": "Snooze"},
+    "snooze_default_hours": 24
+  },
+
+  "ai": {
+    "footer": "Computed from public, de-identified research data. For review by the care team. Research prototype, not for clinical use.",
+    "badge": "{provider} · {model} · {n}/{m} numbers match computed values",
+    "badge_template": "template · {n}/{m} numbers match computed values",
+    "provider_names": {"gemini": "Gemini", "groq": "Groq", "vultr": "Vultr Inference", "local": "Local (Qwen3-4B)", "template": "template"},
+    "max_chars": 600,
+    "blocked_output_patterns": ["diagnos", "predict", "recommend", "should", "surg", "treat", "therap", "respon(se|ding|d)\\b", "likely", "probab", "chance", "\\brisk", "cancer", "metasta", "prognos", "urgent", "fractur"],
+    "number_words": ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "half", "halved", "third", "quarter", "double", "doubled", "twice", "triple", "tripled", "dozen"],
+    "reading_grade": {"formula": "flesch_kincaid_grade/1", "target_max": 8, "label": "Reading grade {grade} (Flesch–Kincaid, computed by code)"},
+    "patient_review_note": "A clinician reviews this text before it is shared.",
+    "templates": {
+      "care_team_summary_lesion_only": {
+        "headline": "{level} lesion volume went from {vol_a} cm³ on Day {day_a} to {vol_b} cm³ on Day {day_b}.",
+        "detail": "The lesion is {pct_vert}% of the vertebra on Day {day_b}. The stiffness change and the lesion's share of it are pending the stiffness analysis."
+      },
+      "patient_explanation_lesion_only": {
+        "headline": "On your Day {day_b} scan, the marked area in {level} measures {vol_b} cm³.",
+        "detail": "On your Day {day_a} scan it measured {vol_a} cm³. {level} is a bone in your spine. Your care team will talk with you about what this means."
+      }
+    }
+  },
+
+  "copilot": {
+    "drawer_label": "Copilot (M8)",
+    "suggested_questions": [
+      "How has L1 changed since the first scan?",
+      "How did the other levels change?",
+      "Which points on the chart are simulated?",
+      "What does lesion share mean?",
+      "What does the heat map show?"
+    ],
+    "refusal": "This assistant restates the stored measurements. Diagnosis and treatment decisions belong to the care team.",
+    "template_answers": {
+      "l1_change_lesion_only": "L1 lesion volume: {vol_a} cm³ on Day {day_a} and {vol_b} cm³ on Day {day_b}. Both points are from real scans."
+    },
+    "terms": ["compressive_strain", "stiffness", "ctra", "lesion_share", "calibration_range", "dice", "lytic_lesion", "simulated_point"],
+    "max_rounds": 3,
+    "max_output_tokens": 400
+  },
+
+  "wording": {
+    "about": "The lint reads every banned_claims pattern case-insensitively (Python re) and runs over README.md, ARCHITECTURE.md, labels.json and the web text. It skips this `wording` object and ai.blocked_output_patterns / ai.number_words, which quote the banned words on purpose.",
+    "banned_claims": [
+      "\\bpredict(s|ed|ing)?\\s+(a\\s+)?(pathological\\s+)?fractures?\\b",
+      "\\bforecasts?\\s+fractures?\\b",
+      "\\bfracture\\s+(risk|prediction|probability)\\b",
+      "\\b(risk|probability|chance|likelihood)\\s+of\\s+(a\\s+)?fracture",
+      "\\d+(\\.\\d+)?\\s*%\\s*(chance|probability|likelihood)\\b",
+      "\\bdiagnos(e|es|ed|ing)\\b",
+      "\\bclinically\\s+validated\\b",
+      "(?<!not )\\bverified\\b",
+      "\\b(fda|health\\s+canada)[-\\s]ready\\b",
+      "\\breplaces?\\s+(mirels|sins|the\\s+surgeon|radiologists?)\\b",
+      "\\bgpu[-\\s]accelerated\\s+physics\\b",
+      "\\bai\\s+predicts\\b",
+      "\\bunsafe\\b",
+      "\\bis\\s+safe\\b",
+      "\\bneeds?\\s+surgery\\b",
+      "\\bresponse\\s+to\\s+(the\\s+)?(current\\s+)?(therapy|therapeutic|treatment)",
+      "\\baccurate\\s+to\\b"
+    ],
+    "never_show": ["Fracture Risk Index", "probability", "safe/unsafe", "needs surgery", "verified"],
+    "say": [
+      "Estimates how much stiffness the vertebra lost since an earlier scan, and how much of that the lesion accounts for. Adapted from CT rigidity analysis; not validated.",
+      "The heat map is simulated compressive strain under a load. It shows where the bone works hardest, not a prediction."
+    ]
+  }
+}

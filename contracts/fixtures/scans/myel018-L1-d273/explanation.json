@@ -1,0 +1,41 @@
+{
+  "scan_id": "myel018-L1-d273",
+  "task": "patient_explanation",
+  "text": {
+    "headline": "On your Day 273 scan, the marked area in L1 measures 3.24 cm³.",
+    "detail": "On your Day 0 scan it measured 0.00 cm³. L1 is a bone in your spine. Your care team will talk with you about what this means.",
+    "numbers_used": [
+      0.0,
+      3.24,
+      273.0
+    ]
+  },
+  "footer": "Computed from public, de-identified research data. For review by the care team. Research prototype, not for clinical use.",
+  "source": "template",
+  "model": null,
+  "verified": true,
+  "numbers_matched": 3,
+  "numbers_total": 3,
+  "badge": "template · 3/3 numbers match computed values",
+  "attempts": [
+    {
+      "provider": "template",
+      "model": null,
+      "ms": 0.0,
+      "outcome": "accepted",
+      "reason": null
+    }
+  ],
+  "facts_sha256": "5c12b80bdb5d644818a630705b47988e0d1a439adfcdc8ffd9ebe36c67006e06",
+  "prompt_version": "template/1",
+  "generated_at": "2026-10-17T20:45:00Z",
+  "cache_hit": false,
+  "chain_override": false,
+  "tokens_in": null,
+  "tokens_out": null,
+  "cost_usd": null,
+  "reading_grade": 2.0,
+  "reading_grade_formula": "flesch_kincaid_grade/1",
+  "target_grade_max": 8.0,
+  "review_note": "A clinician reviews this text before it is shared."
+}

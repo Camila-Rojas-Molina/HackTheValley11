@@ -1,0 +1,52 @@
+{
+  "scan_id": "myel018-L1-d273",
+  "task": "care_team_summary",
+  "text": {
+    "headline": "L1 lesion volume went from 0.00 cm³ on Day 0 to 3.24 cm³ on Day 273.",
+    "detail": "The lesion is 4.73% of the vertebra on Day 273. The stiffness change and the lesion's share of it are pending the stiffness analysis.",
+    "numbers_used": [
+      0.0,
+      3.24,
+      4.73,
+      273.0
+    ]
+  },
+  "footer": "Computed from public, de-identified research data. For review by the care team. Research prototype, not for clinical use.",
+  "source": "template",
+  "model": null,
+  "verified": true,
+  "numbers_matched": 4,
+  "numbers_total": 4,
+  "badge": "template · 4/4 numbers match computed values",
+  "attempts": [
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "ms": 0.0,
+      "outcome": "unavailable",
+      "reason": "GROQ_API_KEY not set"
+    },
+    {
+      "provider": "vultr",
+      "model": "qwen3.8-flash-next",
+      "ms": 0.0,
+      "outcome": "unavailable",
+      "reason": "VULTR_API_KEY not set"
+    },
+    {
+      "provider": "template",
+      "model": null,
+      "ms": 0.0,
+      "outcome": "accepted",
+      "reason": null
+    }
+  ],
+  "facts_sha256": "5c12b80bdb5d644818a630705b47988e0d1a439adfcdc8ffd9ebe36c67006e06",
+  "prompt_version": "template/1",
+  "generated_at": "2026-10-17T20:45:00Z",
+  "cache_hit": false,
+  "chain_override": true,
+  "tokens_in": null,
+  "tokens_out": null,
+  "cost_usd": null
+}

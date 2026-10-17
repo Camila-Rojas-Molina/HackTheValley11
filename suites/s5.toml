@@ -1,0 +1,9 @@
+# Test suites of stream S5 (AI layer), discovered by scripts/test_all.sh (PLAN §3.1).
+# Commands run from the repo root with the worktree's .venv (scripts/bootstrap.sh).
+stream = "S5"
+
+[[suite]]
+name = "ai"
+kind = "unit"   # no database, no server, no network: every model provider is a stub until M6
+cmd = [".venv/bin/python", "-m", "pytest", "-q", "api/tests/ai"]
+requirements = ["api/requirements-ai.txt"]

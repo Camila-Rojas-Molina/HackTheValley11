@@ -1,0 +1,5 @@
+# What the repo and contract suites (suites/s0.toml) and ci-core need. Versions match api/requirements.txt:
+# contracts/openapi.json is generated with exactly these fastapi and pydantic versions.
+fastapi==0.143.3
+pydantic==2.14.1
+pytest==9.1.1

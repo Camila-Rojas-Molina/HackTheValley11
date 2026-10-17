@@ -1,0 +1,12 @@
+# S0 (integrator) suites. Format: scripts/test_all.py. Commands run from the repo root.
+stream = "S0"
+
+[suites.repo]
+what = "docs, wording lint, .gitignore, ownership, import boundaries, test harness, isolation names"
+run = ".venv/bin/python -m pytest -q -p no:cacheprovider tests/repo --ignore=tests/repo/contracts"
+timeout = 600
+
+[suites.contract]
+what = "C1-C7: fixtures parse, openapi.json snapshot, labels rules, pipeline signatures and stubs"
+run = ".venv/bin/python -m pytest -q -p no:cacheprovider tests/repo/contracts"
+timeout = 600

@@ -1,0 +1,35 @@
+{
+  "patient_id": "demo-a",
+  "site": "L1",
+  "metric": "lesion_volume_cm3",
+  "unit": "cm3",
+  "points": [
+    {
+      "time": "2026-01-17T00:00:00Z",
+      "day": 0,
+      "value": 0.0,
+      "basis": "measured",
+      "provenance": "real_scan",
+      "filled": false,
+      "scan_id": "myel018-L1-d0",
+      "mask_source": "expert",
+      "lesion_model": null,
+      "available_in": null
+    },
+    {
+      "time": "2026-10-17T00:00:00Z",
+      "day": 273,
+      "value": 3.24,
+      "basis": "measured",
+      "provenance": "real_scan",
+      "filled": false,
+      "scan_id": "myel018-L1-d273",
+      "mask_source": "expert",
+      "lesion_model": null,
+      "available_in": null
+    }
+  ],
+  "contains_synthetic": false,
+  "source": "fixture",
+  "query_ms": null
+}

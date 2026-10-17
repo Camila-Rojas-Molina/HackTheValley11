@@ -1,0 +1,13 @@
+{
+  "answer": "This assistant restates the stored measurements. Diagnosis and treatment decisions belong to the care team.",
+  "refused": true,
+  "tool_calls": [],
+  "mentions_simulated": false,
+  "source": "template",
+  "model": null,
+  "verified": true,
+  "numbers_matched": 0,
+  "numbers_total": 0,
+  "footer": "Computed from public, de-identified research data. For review by the care team. Research prototype, not for clinical use.",
+  "attempts": []
+}

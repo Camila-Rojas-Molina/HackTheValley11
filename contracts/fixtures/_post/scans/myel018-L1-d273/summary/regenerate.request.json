@@ -1,0 +1,9 @@
+{
+  "chain": [
+    "groq",
+    "vultr",
+    "template"
+  ],
+  "bypass_cache": true,
+  "task": "care_team_summary"
+}

@@ -1,0 +1,12 @@
+{
+  "scan_id": "demo-b-u7c41e2a9",
+  "patient_id": "demo-b",
+  "status": "pending",
+  "jobs": [
+    {
+      "job_id": "9d3e7f10-2c6b-4a8e-8f51-c0b4a7d2e916",
+      "kind": "segment",
+      "status": "queued"
+    }
+  ]
+}

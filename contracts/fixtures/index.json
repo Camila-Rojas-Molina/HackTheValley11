@@ -1,0 +1,335 @@
+{
+  "contract_version": "1.0.0",
+  "fixtures": [
+    {
+      "file": "scans/myel018-L1-d273.json",
+      "operation_id": "get_scan",
+      "method": "GET",
+      "path": "/api/v1/scans/myel018-L1-d273",
+      "status": 200,
+      "model": "ScanManifest",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "scans/myel018-L1-d0.json",
+      "operation_id": "get_scan",
+      "method": "GET",
+      "path": "/api/v1/scans/myel018-L1-d0",
+      "status": 200,
+      "model": "ScanManifest",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "scans/phantom.json",
+      "operation_id": "get_scan",
+      "method": "GET",
+      "path": "/api/v1/scans/phantom",
+      "status": 200,
+      "model": "ScanManifest",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "health.json",
+      "operation_id": "get_health",
+      "method": "GET",
+      "path": "/api/v1/health",
+      "status": 200,
+      "model": "Health",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "health.down.json",
+      "operation_id": "get_health",
+      "method": "GET",
+      "path": "/api/v1/health",
+      "status": 503,
+      "model": "Health",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "patients.json",
+      "operation_id": "list_patients",
+      "method": "GET",
+      "path": "/api/v1/patients",
+      "status": 200,
+      "model": "PatientList",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "patients/demo-a.json",
+      "operation_id": "get_patient",
+      "method": "GET",
+      "path": "/api/v1/patients/demo-a",
+      "status": 200,
+      "model": "PatientDetail",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "patients/demo-a/scans.json",
+      "operation_id": "list_patient_scans",
+      "method": "GET",
+      "path": "/api/v1/patients/demo-a/scans",
+      "status": 200,
+      "model": "ScanList",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "patients/demo-a/levels.json",
+      "operation_id": "get_patient_levels",
+      "method": "GET",
+      "path": "/api/v1/patients/demo-a/levels",
+      "status": 200,
+      "model": "LevelLadder",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "patients/demo-a/series.site-L1.metric-lesion_volume_cm3.json",
+      "operation_id": "get_patient_series",
+      "method": "GET",
+      "path": "/api/v1/patients/demo-a/series?site=L1&metric=lesion_volume_cm3",
+      "status": 200,
+      "model": "Series",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "patients/demo-a/series.site-L1.metric-stiffness_change_axial_pct.json",
+      "operation_id": "get_patient_series",
+      "method": "GET",
+      "path": "/api/v1/patients/demo-a/series?site=L1&metric=stiffness_change_axial_pct",
+      "status": 200,
+      "model": "Series",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "ai/facts.myel018-L1-d273.json",
+      "operation_id": "get_scan_summary",
+      "method": "GET",
+      "path": null,
+      "status": 200,
+      "model": "Facts",
+      "kind": "facts",
+      "note": "input to the AI chain; never served by a route"
+    },
+    {
+      "file": "scans/myel018-L1-d273/summary.json",
+      "operation_id": "get_scan_summary",
+      "method": "GET",
+      "path": "/api/v1/scans/myel018-L1-d273/summary",
+      "status": 200,
+      "model": "Generation",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "_post/scans/myel018-L1-d273/summary/regenerate.request.json",
+      "operation_id": "regenerate_scan_summary",
+      "method": "POST",
+      "path": "/api/v1/scans/myel018-L1-d273/summary/regenerate",
+      "status": 200,
+      "model": "RegenerateRequest",
+      "kind": "request",
+      "note": null
+    },
+    {
+      "file": "_post/scans/myel018-L1-d273/summary/regenerate.response.json",
+      "operation_id": "regenerate_scan_summary",
+      "method": "POST",
+      "path": "/api/v1/scans/myel018-L1-d273/summary/regenerate",
+      "status": 200,
+      "model": "Generation",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "scans/myel018-L1-d273/explanation.json",
+      "operation_id": "get_scan_explanation",
+      "method": "GET",
+      "path": "/api/v1/scans/myel018-L1-d273/explanation",
+      "status": 200,
+      "model": "Explanation",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "jobs/6f1c2a9e-3b7d-4c55-9a0e-2d8f4b1e7c30.json",
+      "operation_id": "get_job",
+      "method": "GET",
+      "path": "/api/v1/jobs/6f1c2a9e-3b7d-4c55-9a0e-2d8f4b1e7c30",
+      "status": 200,
+      "model": "Job",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "_post/scans/myel018-L1-d273/runs.request.json",
+      "operation_id": "start_scan_run",
+      "method": "POST",
+      "path": "/api/v1/scans/myel018-L1-d273/runs",
+      "status": 200,
+      "model": "RunRequest",
+      "kind": "request",
+      "note": null
+    },
+    {
+      "file": "_post/scans/myel018-L1-d273/runs.response.json",
+      "operation_id": "start_scan_run",
+      "method": "POST",
+      "path": "/api/v1/scans/myel018-L1-d273/runs",
+      "status": 202,
+      "model": "RunAccepted",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "_post/scans.response.json",
+      "operation_id": "upload_scan",
+      "method": "POST",
+      "path": "/api/v1/scans?patient_id=demo-b&day=0",
+      "status": 202,
+      "model": "ScanUploadAccepted",
+      "kind": "response",
+      "note": "request body: the CT as application/gzip (.nii.gz), see formats.md"
+    },
+    {
+      "file": "_post/alerts/al-myel018-L1-d273/feedback.request.json",
+      "operation_id": "post_alert_feedback",
+      "method": "POST",
+      "path": "/api/v1/alerts/al-myel018-L1-d273/feedback",
+      "status": 200,
+      "model": "AlertFeedbackRequest",
+      "kind": "request",
+      "note": null
+    },
+    {
+      "file": "_post/alerts/al-myel018-L1-d273/feedback.response.json",
+      "operation_id": "post_alert_feedback",
+      "method": "POST",
+      "path": "/api/v1/alerts/al-myel018-L1-d273/feedback",
+      "status": 201,
+      "model": "AlertFeedbackAck",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "_post/copilot.trend.request.json",
+      "operation_id": "post_copilot",
+      "method": "POST",
+      "path": "/api/v1/copilot",
+      "status": 200,
+      "model": "CopilotRequest",
+      "kind": "request",
+      "note": null
+    },
+    {
+      "file": "_post/copilot.trend.response.json",
+      "operation_id": "post_copilot",
+      "method": "POST",
+      "path": "/api/v1/copilot",
+      "status": 200,
+      "model": "CopilotAnswer",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "_post/copilot.refusal.request.json",
+      "operation_id": "post_copilot",
+      "method": "POST",
+      "path": "/api/v1/copilot",
+      "status": 200,
+      "model": "CopilotRequest",
+      "kind": "request",
+      "note": null
+    },
+    {
+      "file": "_post/copilot.refusal.response.json",
+      "operation_id": "post_copilot",
+      "method": "POST",
+      "path": "/api/v1/copilot",
+      "status": 200,
+      "model": "CopilotAnswer",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "tiger/info.json",
+      "operation_id": "get_tiger_info",
+      "method": "GET",
+      "path": "/api/v1/tiger/info",
+      "status": 200,
+      "model": "TigerInfo",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "audit/myel018-L1-d273.json",
+      "operation_id": "get_audit_trail",
+      "method": "GET",
+      "path": "/api/v1/audit/myel018-L1-d273",
+      "status": 200,
+      "model": "AuditTrail",
+      "kind": "response",
+      "note": null
+    },
+    {
+      "file": "_errors/not_available.json",
+      "operation_id": "*",
+      "method": "GET",
+      "path": null,
+      "status": 501,
+      "model": "NotAvailable",
+      "kind": "error",
+      "note": null
+    },
+    {
+      "file": "_errors/unauthorized.json",
+      "operation_id": "*",
+      "method": "GET",
+      "path": null,
+      "status": 401,
+      "model": "ErrorDetail",
+      "kind": "error",
+      "note": null
+    },
+    {
+      "file": "_errors/not_found.json",
+      "operation_id": "*",
+      "method": "GET",
+      "path": null,
+      "status": 404,
+      "model": "ErrorDetail",
+      "kind": "error",
+      "note": null
+    },
+    {
+      "file": "_errors/db_unavailable.json",
+      "operation_id": "*",
+      "method": "GET",
+      "path": null,
+      "status": 503,
+      "model": "Unavailable",
+      "kind": "error",
+      "note": null
+    },
+    {
+      "file": "_errors/too_large.json",
+      "operation_id": "upload_scan",
+      "method": "GET",
+      "path": null,
+      "status": 413,
+      "model": "ErrorDetail",
+      "kind": "error",
+      "note": null
+    }
+  ]
+}

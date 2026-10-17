@@ -1,0 +1,43 @@
+# Stream S5 (AI layer): provider stubs, chain, checker, template, facts and provenance.
+# No secrets and no network: every model provider is a stub until M6 and AI_CHAIN is pinned to the
+# template (Galit's gate). The contracts (contracts/, api/app/schemas.py) come from stream S0.
+name: s5-ai
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s5-ai-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ai:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AI_CHAIN: template
+      AI_OFFLINE: "0"
+      GEMINI_API_KEY: ""
+      GOOGLE_API_KEY: ""
+      GROQ_API_KEY: ""
+      VULTR_API_KEY: ""
+      VULTR_INFERENCE_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            api/requirements.txt
+            api/requirements-ai.txt
+      - name: Install
+        run: python -m pip install -r api/requirements-ai.txt
+      - name: AI layer tests
+        run: python -m pytest -q api/tests/ai

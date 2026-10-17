@@ -1,0 +1,149 @@
+{
+  "schema": "rb.manifest/1",
+  "scan_id": "phantom",
+  "patient_id": null,
+  "label": "Synthetic phantom",
+  "level": null,
+  "day": null,
+  "time": null,
+  "provenance": "synthetic_insilico",
+  "simulated": true,
+  "generator_version": "phantom-femur-shaft/1",
+  "anchor_scan_ids": [],
+  "seed": 0,
+  "acquisition": {
+    "acquisition_id": "phantom",
+    "dataset_case": null,
+    "series_instance_uid": null,
+    "series_description": "Synthetic femur-shaft phantom with a lytic defect",
+    "modality": "CT",
+    "kvp": null,
+    "source_shape": null,
+    "source_spacing_mm": null
+  },
+  "grid": {
+    "shape": [
+      96,
+      96,
+      128
+    ],
+    "spacing_mm": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "affine": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        -48.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        -48.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        -64.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "margin_mm": null,
+    "dtype": "int16"
+  },
+  "registration": {
+    "status": "not_registered",
+    "fixed_scan_id": null,
+    "method": null,
+    "available_in": null
+  },
+  "calibration": null,
+  "calibration_available_in": null,
+  "mask_sources": {
+    "vertebra": null,
+    "body": null,
+    "lesion": null,
+    "body_split_method": null,
+    "caption": "Synthetic phantom · mock strain field"
+  },
+  "assets": [
+    {
+      "name": "ct.nii.gz",
+      "kind": "ct",
+      "url": "/api/v1/scans/phantom/assets/ct.nii.gz",
+      "media_type": "application/gzip",
+      "variant": null,
+      "field": null,
+      "basis": "mock",
+      "provenance": "synthetic_insilico",
+      "status": "pending",
+      "available_in": "M3",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "name": "strain_min_principal_ue.mock.nii.gz",
+      "kind": "strain_volume",
+      "url": "/api/v1/scans/phantom/assets/strain_min_principal_ue.mock.nii.gz",
+      "media_type": "application/gzip",
+      "variant": "mock",
+      "field": "strain_min_principal_ue",
+      "basis": "mock",
+      "provenance": "synthetic_insilico",
+      "status": "pending",
+      "available_in": "M3",
+      "bytes": null,
+      "sha256": null
+    },
+    {
+      "name": "strain_min_principal_ue.mock.mz3",
+      "kind": "strain_surface",
+      "url": "/api/v1/scans/phantom/assets/strain_min_principal_ue.mock.mz3",
+      "media_type": "application/octet-stream",
+      "variant": "mock",
+      "field": "strain_min_principal_ue",
+      "basis": "mock",
+      "provenance": "synthetic_insilico",
+      "status": "pending",
+      "available_in": "M3",
+      "bytes": null,
+      "sha256": null
+    }
+  ],
+  "color_scales": [
+    {
+      "layer": "ct",
+      "colormap": "gray",
+      "cal_min": -500.0,
+      "cal_max": 1500.0,
+      "unit": null,
+      "display": "window",
+      "opacity": 1.0,
+      "scope": "scan",
+      "basis": "mock"
+    },
+    {
+      "layer": "strain_min_principal_ue",
+      "colormap": "turbo",
+      "cal_min": 0.0,
+      "cal_max": 1500.0,
+      "unit": "ue",
+      "display": "magnitude",
+      "opacity": 0.8,
+      "scope": "scan",
+      "basis": "mock"
+    }
+  ],
+  "metrics": [],
+  "labels_version": "1"
+}

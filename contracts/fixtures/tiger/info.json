@@ -1,0 +1,73 @@
+{
+  "backend": "timescaledb",
+  "timescaledb_version": null,
+  "hypertables": [
+    {
+      "name": "scan_metrics",
+      "chunk_interval": "90 days",
+      "chunks": null,
+      "compressed_chunks": null,
+      "rows_estimate": null,
+      "before_bytes": null,
+      "after_bytes": null
+    },
+    {
+      "name": "fe_element_results",
+      "chunk_interval": "30 days",
+      "chunks": null,
+      "compressed_chunks": null,
+      "rows_estimate": null,
+      "before_bytes": null,
+      "after_bytes": null
+    },
+    {
+      "name": "ai_generation",
+      "chunk_interval": "7 days",
+      "chunks": null,
+      "compressed_chunks": null,
+      "rows_estimate": null,
+      "before_bytes": null,
+      "after_bytes": null
+    }
+  ],
+  "continuous_aggregates": [
+    {
+      "name": "scan_metrics_monthly",
+      "hypertable": "scan_metrics",
+      "bucket": "1 month",
+      "group_by": [
+        "bucket",
+        "patient_id",
+        "site",
+        "provenance",
+        "mask_source",
+        "lesion_model"
+      ],
+      "materialized_only": null
+    },
+    {
+      "name": "fe_level_daily",
+      "hypertable": "fe_element_results",
+      "bucket": "1 day",
+      "group_by": [
+        "bucket",
+        "patient_id",
+        "site",
+        "provenance",
+        "mask_source",
+        "lesion_model",
+        "run_id"
+      ],
+      "materialized_only": null
+    }
+  ],
+  "db_size_bytes": null,
+  "db_size_pretty": null,
+  "budget_bytes": 314572800,
+  "query_ms": {
+    "raw_ms": null,
+    "aggregate_ms": null
+  },
+  "source": "fixture",
+  "measured_at": "2026-10-17T20:45:00Z"
+}

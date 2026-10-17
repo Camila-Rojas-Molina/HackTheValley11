@@ -1,0 +1,12 @@
+{
+  "status": "ok",
+  "db": "ok",
+  "version": "1.0.0",
+  "labels_version": "1",
+  "server_time": "2026-10-17T20:45:00Z",
+  "timescaledb": true,
+  "ai_chain": [
+    "template"
+  ],
+  "queue": null
+}

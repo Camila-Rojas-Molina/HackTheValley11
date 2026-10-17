@@ -1,0 +1,116 @@
+{
+  "version": "1",
+  "about": "PLAN.md section 3.1 as globs. scripts/check_ownership.py --all: every tracked file matches exactly one stream. --branch <b>: every file the branch changed (git diff --name-only <merge-base>...<b>) belongs to that branch's stream. The Push-1 mechanical commit (push1-moves.sh) is checked with --all only.",
+  "glob_semantics": "Paths are repo-relative with '/' separators. '**' matches zero or more whole path segments ('a/**' matches 'a/x' and 'a/x/y'); '*' matches within one segment and never '/'; '?' matches one non-'/' character. No braces: every alternative is listed. A file is owned by a stream when it matches one of the stream's include globs and none of its exclude globs.",
+  "branch_stream": "A stream branch is rb/<stream>[-<topic>]/<milestone>, e.g. rb/s0/m1, rb/s1-web/m1, rb/s3-physics/m5. The stream is the 's<N>' at the start of the second segment (S<N>); the milestone is the last segment (m1 -> M1, m9-1 -> M9-1). rb/integrate/* and rb/land/* are integration branches, not stream branches.",
+  "streams": {
+    "S0": {
+      "name": "Integrator",
+      "include": [
+        "README.md",
+        "ARCHITECTURE.md",
+        "contracts/**",
+        "api/app/schemas.py",
+        ".github/workflows/ci-core.yml",
+        ".gitignore",
+        "scripts/**",
+        "suites/s0.toml",
+        "tests/repo/**",
+        "pipeline/pyproject.toml",
+        "pipeline/rb_pipeline/__init__.py",
+        "pipeline/tests/conftest.py"
+      ],
+      "exclude": []
+    },
+    "S1": {
+      "name": "Web",
+      "include": [
+        "web/**",
+        "suites/s1.toml",
+        ".github/workflows/s1-web.yml"
+      ],
+      "exclude": []
+    },
+    "S2": {
+      "name": "Data and Bone Finder",
+      "include": [
+        "pipeline/rb_pipeline/io/**",
+        "pipeline/rb_pipeline/segment/**",
+        "pipeline/rb_pipeline/longitudinal/**",
+        "pipeline/tests/io/**",
+        "pipeline/tests/segment/**",
+        "pipeline/tests/longitudinal/**",
+        "pipeline/tests/test_demo_bundle.py",
+        "pipeline/requirements-io.txt",
+        "pipeline/requirements-seg.txt",
+        "demo/**",
+        "suites/s2.toml",
+        ".github/workflows/s2-data.yml"
+      ],
+      "exclude": []
+    },
+    "S3": {
+      "name": "Physics",
+      "include": [
+        "pipeline/rb_pipeline/physics/**",
+        "pipeline/rb_pipeline/export/**",
+        "pipeline/tests/physics/**",
+        "pipeline/tests/export/**",
+        "pipeline/scripts/crosscheck.py",
+        "pipeline/requirements-physics.txt",
+        "suites/s3.toml",
+        ".github/workflows/s3-physics.yml"
+      ],
+      "exclude": []
+    },
+    "S4": {
+      "name": "API, jobs, Tiger",
+      "include": [
+        "api/**",
+        "worker/**",
+        "suites/s4.toml",
+        ".github/workflows/s4-api.yml"
+      ],
+      "exclude": [
+        "api/app/ai/**",
+        "api/tests/ai/**",
+        "api/requirements-ai.txt",
+        "api/app/schemas.py"
+      ]
+    },
+    "S5": {
+      "name": "AI layer",
+      "include": [
+        "api/app/ai/**",
+        "api/tests/ai/**",
+        "api/requirements-ai.txt",
+        "suites/s5.toml",
+        ".github/workflows/s5-ai.yml"
+      ],
+      "exclude": []
+    },
+    "S6": {
+      "name": "Deploy",
+      "include": [
+        "deploy/**",
+        ".dockerignore",
+        "suites/s6.toml",
+        ".github/workflows/s6-deploy.yml"
+      ],
+      "exclude": []
+    }
+  },
+  "bootstrap_exceptions": {
+    "about": "Files another stream owns that S0 writes once, in the named milestone, as part of a contract. --branch allows them on S0's branch in that milestone only; from then on the owning stream edits them and S0's signature snapshot test (tests/repo) catches contract drift.",
+    "M1": {
+      "S0": [
+        "pipeline/rb_pipeline/io/__init__.py",
+        "pipeline/rb_pipeline/segment/__init__.py",
+        "pipeline/rb_pipeline/longitudinal/__init__.py",
+        "pipeline/rb_pipeline/physics/__init__.py",
+        "pipeline/rb_pipeline/export/__init__.py",
+        "worker/rb_worker/__init__.py"
+      ]
+    }
+  }
+}

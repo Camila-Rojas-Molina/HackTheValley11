@@ -1,0 +1,6 @@
+# AI layer (stream S5). Install with: .venv/bin/python -m pip install -r api/requirements-ai.txt
+# The API's own pins come from requirements.txt (S4), so the two files never pin one package twice.
+-r requirements.txt
+
+# Nothing AI-only until M6: every model provider is a stub, so no SDK is installed before Galit's gate.
+# M6 adds google-genai==2.31.0 (contracts/ai-interface.md); Groq, Vultr and local share the httpx adapter.

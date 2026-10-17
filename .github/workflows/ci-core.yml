@@ -1,0 +1,42 @@
+# S0 core CI: the repo and contract suites (suites/s0.toml) through the same runner the team uses locally.
+# No secrets and no network services: docs, wording lint, .gitignore, ownership, import boundaries, harness,
+# fixtures, the openapi.json snapshot, labels and the C7 pipeline signatures. Other streams have their own
+# workflows (.github/workflows/s<N>-*.yml).
+name: ci-core
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-and-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements-repo.txt
+      - name: Git identity for the throwaway repos the harness tests create
+        run: |
+          git config --global user.name "ci-core"
+          git config --global user.email "ci-core@users.noreply.github.com"
+      - name: Bootstrap .venv (scripts/requirements-repo.txt only)
+        run: scripts/bootstrap.sh --only repo
+      - name: Repo and contract suites
+        run: scripts/test_all.sh --stream S0 repo contract
+      - name: Ownership map covers every tracked file
+        run: .venv/bin/python scripts/check_ownership.py --all
+      - name: Contract files are regenerated from api/app/schemas.py
+        run: .venv/bin/python scripts/build_contracts.py --check

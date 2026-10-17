@@ -1,0 +1,28 @@
+{
+  "scan_id": "myel018-L1-d273",
+  "chain_key": "scan:myel018-L1-d273",
+  "chain_ok": true,
+  "head": "579e2cbec5f4589afbb6a894492d0025a76a9132ac5609aacc871b531d81da05",
+  "entries": [
+    {
+      "seq": 1,
+      "at": "2026-10-17T20:40:00Z",
+      "actor": "seed",
+      "action": "seed_demo",
+      "patient_id": "demo-a",
+      "scan_id": "myel018-L1-d273",
+      "run_id": null,
+      "detail": {
+        "assets": {
+          "ct.nii.gz": "4ca90d8bb7dc061418def973dea8d04933c70dfd39ac01207f708a13a98468f1",
+          "mask_vertebra.expert.nii.gz": "b22e99cd5dda3939f74779429f9206e73c241057a6b3ba23b3a8f9f327633f1d",
+          "mask_lesion.expert.nii.gz": "163103d9f49ec3af765b94adf563a83c258ecfd46aab34512534fe1b343dae38"
+        },
+        "source": "demo/myel018-L1-d273",
+        "provenance": "real_scan"
+      },
+      "prev_hash": "",
+      "hash": "579e2cbec5f4589afbb6a894492d0025a76a9132ac5609aacc871b531d81da05"
+    }
+  ]
+}

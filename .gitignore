@@ -14,7 +14,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/
@@ -224,3 +224,21 @@ __marimo__/
 !.env.example
 docs/planning/
 .pgdata*/
+
+# RainbowBone (PLAN M1): web build output, scan and mesh data, local databases, stream status notes.
+# Large data lives in RB_DATA_DIR outside the repo; demo/ is the curated bundle and is always tracked.
+node_modules/
+.next/
+*.nii
+*.nii.gz
+*.dcm
+*.vtu
+*.vtp
+*.vti
+*.mz3
+*.stl
+data/
+.pgdata/
+.rb-status.md
+!demo/**
+demo/**/.env*

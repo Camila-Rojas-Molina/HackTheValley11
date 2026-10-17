@@ -1,0 +1,92 @@
+{
+  "patient_id": "demo-a",
+  "label": "Demo patient A",
+  "dataset": "TCIA Spinal-Multiple-Myeloma-SEG",
+  "dataset_case": "Myel_018",
+  "latest_scan_id": "myel018-L1-d273",
+  "latest_day": 273,
+  "scan_count": 2,
+  "flag": {
+    "status": "pending",
+    "rule_version": "flag/1",
+    "level": "L1",
+    "scan_id": "myel018-L1-d273",
+    "alert_id": null,
+    "conditions": [
+      {
+        "key": "lesion_new_or_grew",
+        "met": true,
+        "value": 3.24,
+        "threshold": null,
+        "unit": "cm3",
+        "basis": "measured",
+        "available_in": null,
+        "detail": "new lesion at L1: 0.00 to 3.24 cm3 (original grid)"
+      },
+      {
+        "key": "lesion_share_at_least",
+        "met": null,
+        "value": null,
+        "threshold": null,
+        "unit": "pts",
+        "basis": "pending",
+        "available_in": "M5",
+        "detail": null
+      },
+      {
+        "key": "share_exceeds_calibration_range",
+        "met": null,
+        "value": null,
+        "threshold": null,
+        "unit": "pts",
+        "basis": "pending",
+        "available_in": "M5",
+        "detail": null
+      }
+    ],
+    "line": "Not yet evaluated: new lesion at L1 (0.00 → 3.24 cm³); its share of L1's stiffness change is pending FE (M5).",
+    "protocol_line": "Review at the next huddle; confirm the mobility and fall-precaution plan; notify the attending physician, per your facility's protocol.",
+    "data_quality": {
+      "mask_source": "expert",
+      "lesion_source": "expert",
+      "calibration_range": null,
+      "provenance": "real_scan",
+      "simulated": false
+    }
+  },
+  "scans": [
+    {
+      "scan_id": "myel018-L1-d0",
+      "patient_id": "demo-a",
+      "level": "L1",
+      "day": 0,
+      "time": "2026-01-17T00:00:00Z",
+      "label": "Day 0",
+      "provenance": "real_scan",
+      "simulated": false,
+      "status": "pending",
+      "has_strain": false
+    },
+    {
+      "scan_id": "myel018-L1-d273",
+      "patient_id": "demo-a",
+      "level": "L1",
+      "day": 273,
+      "time": "2026-10-17T00:00:00Z",
+      "label": "Day 273",
+      "provenance": "real_scan",
+      "simulated": false,
+      "status": "ready",
+      "has_strain": false
+    }
+  ],
+  "sites": [
+    "T11",
+    "T12",
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5"
+  ]
+}
