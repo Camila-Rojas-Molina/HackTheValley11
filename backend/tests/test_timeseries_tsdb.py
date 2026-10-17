@@ -330,3 +330,158 @@ async def test_device_gaps_use_toolkit_heartbeat_agg_and_match_the_plain_computa
         "SELECT 1 FROM timescaledb_information.continuous_aggregates WHERE view_name = 'telemetry_heartbeat_1h'"
     )).fetchone()
     assert cagg is not None
+
+
+# --- review round 2: device gaps at the window edges, re-seeding over compressed chunks, backlog ------
+async def _gaps_both(conn, user, hours):
+    tk_out = await timeseries.device_gaps(conn, user, hours=hours)
+    plain = await timeseries.device_gaps(conn, user, hours=hours, method="plain_lag")
+    return tk_out, plain
+
+
+def _same_ranges(a, b, tol=1.0):
+    assert a["num_gaps"] == b["num_gaps"], (a["dead_ranges"], b["dead_ranges"])
+    for x, y in zip(a["dead_ranges"], b["dead_ranges"]):
+        assert abs(x["start_s_ago"] - y["start_s_ago"]) <= tol and abs(x["end_s_ago"] - y["end_s_ago"]) <= tol, (x, y)
+    assert abs(a["downtime_s"] - b["downtime_s"]) <= 2 * tol * max(1, a["num_gaps"])
+
+
+async def test_toolkit_gaps_include_the_silence_before_and_after_the_hours_with_data(conn):
+    if (await timeseries.setup(conn))["gaps_method"] != "toolkit_heartbeat_agg":
+        pytest.skip("this server has no Toolkit")
+    user = await _user(conn)
+    await conn.execute(
+        """INSERT INTO scrunchie_telemetry (time, user_id, profile, ax_mg, ay_mg, az_mg)
+           SELECT t, %s, 'care', 0, 0, 1000
+             FROM generate_series(now() - interval '3 hours', now() - interval '2 hours', interval '1 s') t""", (user,))
+    tk_out, plain = await _gaps_both(conn, user, 4)
+    assert tk_out["method"] == "toolkit_heartbeat_agg"
+    _same_ranges(tk_out, plain)
+    first, last = tk_out["dead_ranges"][0], tk_out["dead_ranges"][-1]
+    assert abs(first["start_s_ago"] - 14400) <= 1 and abs(last["end_s_ago"]) <= 1      # silent until now
+    assert abs(last["start_s_ago"] - (7200 - 60)) <= 1
+
+
+async def test_toolkit_gaps_keep_a_samples_liveness_past_an_hour_boundary(conn):
+    if (await timeseries.setup(conn))["gaps_method"] != "toolkit_heartbeat_agg":
+        pytest.skip("this server has no Toolkit")
+    user = await _user(conn)
+    # The last sample is 20 s before the top of an hour: it keeps the device live 40 s into the next.
+    await conn.execute(
+        """INSERT INTO scrunchie_telemetry (time, user_id, profile, ax_mg, ay_mg, az_mg)
+           SELECT t, %s, 'care', 0, 0, 1000
+             FROM generate_series(date_trunc('hour', now()) - interval '1 hour 20 s',
+                                  date_trunc('hour', now()) - interval '20 s', interval '1 s') t""", (user,))
+    tk_out, plain = await _gaps_both(conn, user, 3)
+    _same_ranges(tk_out, plain)
+
+
+@pytest.fixture(scope="module", params=URIS or ["unset"])
+def ts_app_url(request):
+    """A database of its own for the tests that drive the API (and seed a lot of rows)."""
+    url = fresh_database(request.param, "stillhere_tsdb_api")
+    apply_migrations(url)
+    with psycopg.connect(url, autocommit=True) as c:
+        c.execute("""SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs
+                      WHERE job_id >= 1000""")
+    return url
+
+
+@pytest_asyncio.fixture
+async def api(ts_app_url):
+    import httpx
+
+    from app.config import Settings
+    from app.main import create_app
+    s = Settings(database_url=ts_app_url, admin_key="tsdb-admin", device_key="tsdb-device", wearer_key="tsdb-wearer",
+                 demo_pin="2468", demo_duress_pin="1357", app_secret="tsdb-secret",
+                 public_base_url="https://stillhere.test", run_workers=False, auto_migrate=False, demo_seed=True)
+    application = create_app(s, start_workers=False)
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://t",
+                                     timeout=600) as c:
+            yield c
+
+
+ADMIN_H = {"X-Admin-Key": "tsdb-admin"}
+WEARER_H = {"Authorization": "Bearer tsdb-wearer"}
+
+
+async def _run_jobs(url, proc, tables=None):
+    async with await psycopg.AsyncConnection.connect(url, autocommit=True, row_factory=dict_row) as c:
+        for j in await (await c.execute(
+                """SELECT job_id, hypertable_name FROM timescaledb_information.jobs
+                    WHERE proc_name = %s AND job_id >= 1000""", (proc,))).fetchall():
+            if tables is None or j["hypertable_name"] in tables:
+                await c.execute(f"CALL run_job({int(j['job_id'])})")
+
+
+@pytest.mark.parametrize("profile", ["care", "night_out"])
+async def test_reseeding_the_synthetic_baseline_works_once_its_chunks_are_compressed(api, ts_app_url, profile):
+    first = await api.post("/v1/telemetry/synthetic", headers=ADMIN_H, json={"profile": profile})
+    assert first.status_code == 200, first.text
+    assert first.json()["motion_rows"] == 604800
+    await _run_jobs(ts_app_url, "policy_compression")
+    async with await psycopg.AsyncConnection.connect(ts_app_url, autocommit=True, row_factory=dict_row) as c:
+        st = await (await c.execute(
+            "SELECT number_compressed_chunks AS n FROM hypertable_columnstore_stats('scrunchie_telemetry'::regclass)")).fetchone()
+    assert st["n"] >= 5
+    again = await api.post("/v1/telemetry/synthetic", headers=ADMIN_H, json={"profile": profile})
+    assert again.status_code == 200, again.text
+    assert again.json()["motion_rows"] == 604800
+
+
+async def test_a_backlog_older_than_the_refresh_window_reaches_every_rollup(api, ts_app_url):
+    from datetime import datetime
+
+    from app.security import sha256_hex
+    async with await psycopg.AsyncConnection.connect(ts_app_url, autocommit=True, row_factory=dict_row) as c:
+        uid = (await (await c.execute(
+            "INSERT INTO users (display_name, api_key_hash) VALUES ('backlog', %s) RETURNING id",
+            (sha256_hex("backlog-wearer"),))).fetchone())["id"]
+    wearer_h = {"Authorization": "Bearer backlog-wearer"}
+    now = (await api.get("/v1/health")).json()["server_time"]
+    t_now = datetime.fromisoformat(now).timestamp()
+    live = [[t_now - 600 + i * 0.1, 0, 0, 1000] for i in range(100)]          # 10 min ago
+    r = await api.post("/v1/telemetry/batch", headers=wearer_h, json={"rows": live, "clock": "epoch",
+                                                                       "batch_id": "live-1"})
+    assert r.status_code == 200 and r.json()["inserted"] == 100, r.text
+    await _run_jobs(ts_app_url, "policy_refresh_continuous_aggregate")     # the live minutes are materialized
+    old = [[t_now - 5 * 3600 + i * 0.1, 0, 0, 1000] for i in range(600)]     # a backlog from 5 h ago
+    r = await api.post("/v1/telemetry/batch", headers=wearer_h, json={"rows": old, "clock": "epoch",
+                                                                      "batch_id": "old-1"})
+    assert r.status_code == 200 and r.json()["inserted"] == 600, r.text
+    for _ in range(3):
+        await _run_jobs(ts_app_url, "policy_refresh_continuous_aggregate")
+    async with await psycopg.AsyncConnection.connect(ts_app_url, autocommit=True, row_factory=dict_row) as c:
+        counts = {}
+        for v in ("scrunchie_telemetry", "telemetry_1m", "telemetry_1h", "telemetry_1d"):
+            col = "count(*)" if v == "scrunchie_telemetry" else "sum(n)"
+            counts[v] = (await (await c.execute(f"SELECT {col}::bigint AS n FROM {v} WHERE user_id = %s",
+                                                (uid,))).fetchone())["n"]
+    assert counts == {"scrunchie_telemetry": 700, "telemetry_1m": 700, "telemetry_1h": 700, "telemetry_1d": 700}
+    agg = (await api.get("/v1/telemetry/aggregates", headers=wearer_h,
+                         params={"series": "motion", "resolution": "1h", "hours": 8, "user_id": str(uid)})).json()
+    assert sum(b["n"] for b in agg["buckets"]) == 700, agg
+
+
+NOPRELOAD = os.environ.get("STILLHERE_TSDB_NOPRELOAD_URI")
+
+
+@pytest.mark.skipif(not NOPRELOAD, reason="set STILLHERE_TSDB_NOPRELOAD_URI to a TimescaleDB server whose "
+                                          "shared_preload_libraries leaves timescaledb out")
+def test_migrations_fall_back_to_plain_postgres_when_timescaledb_is_installed_but_not_preloaded():
+    with psycopg.connect(NOPRELOAD, autocommit=True) as c:
+        avail = c.execute("SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb'").fetchone()
+        assert avail, "this server does not have the timescaledb package"
+        c.execute('DROP DATABASE IF EXISTS "stillhere_nopreload" WITH (FORCE)')
+        c.execute('CREATE DATABASE "stillhere_nopreload" TEMPLATE template0')
+    from psycopg.conninfo import make_conninfo
+    url = make_conninfo(NOPRELOAD, dbname="stillhere_nopreload")
+    applied = apply_migrations(url)
+    from scripts.migrate import migration_files
+    assert applied == [p.name for p in migration_files()]
+    with psycopg.connect(url, autocommit=True, row_factory=dict_row) as c:
+        s = c.execute("SELECT mode, note FROM timeseries_setup").fetchone()
+        assert s["mode"] == "plain" and "shared_preload_libraries" in s["note"], s
+        assert c.execute("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'").fetchone() is None

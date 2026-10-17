@@ -31,9 +31,16 @@
 -- Nothing here can change a session, alert or timer: these objects are read by the dashboard.
 
 -- 0. Extensions (best effort; absent on plain PostgreSQL).
+--    timescaledb only when its library is preloaded: on a server where the package is installed but
+--    not in shared_preload_libraries, CREATE EXTENSION ends the whole session (FATAL), which no
+--    exception handler can catch. The preloaded loader registers its own settings (for example
+--    timescaledb.disable_load), which pg_settings lists even for users who may not read
+--    shared_preload_libraries itself.
 DO $ext$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb') THEN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb')
+     AND (EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb')
+          OR EXISTS (SELECT 1 FROM pg_settings WHERE name = 'timescaledb.disable_load')) THEN
     BEGIN
       CREATE EXTENSION IF NOT EXISTS timescaledb;
     EXCEPTION WHEN OTHERS THEN
@@ -285,7 +292,10 @@ BEGIN
 
   INSERT INTO timeseries_setup (mode, note)
   VALUES (CASE WHEN use_ts THEN 'timescaledb' ELSE 'plain' END,
-          CASE WHEN why IS NOT NULL THEN 'TimescaleDB setup failed: ' || why END);
+          CASE WHEN why IS NOT NULL THEN 'TimescaleDB setup failed: ' || why
+               WHEN NOT use_ts AND EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb')
+               THEN 'TimescaleDB is installed on this server but not in shared_preload_libraries, so it was not '
+                    'enabled; plain PostgreSQL objects are used. Preload it and use a new database to switch.' END);
 END
 $tsdb$;
 

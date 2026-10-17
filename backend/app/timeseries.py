@@ -13,7 +13,8 @@ Rollups keep 8 days at 1 min (the z-score baseline needs 7), 90 days at 1 h; dai
 Real-time rollups on TimescaleDB: buckets newer than the last materialized one are aggregated
 from raw rows at query time. Materialization is shared by all users, so a row that arrives
 behind an already materialized bucket appears after the next 1-minute policy run (every minute,
-covering the last 2 hours).
+covering the last 2 hours); a batch with older rows (a backlog) has its own range refreshed by the
+ingest call itself (refresh_backlog), so every accepted row reaches the 1 min, 1 h and 1 d rollups.
 
 This module only stores and reads numbers. It imports nothing from the state machine, so no
 value computed here can change a session, open an alert or move a timer.
@@ -35,7 +36,12 @@ CARE_RAW = timedelta(days=30)
 
 # Ingest limits.
 MAX_ROWS = 6000                       # 2 minutes at 50 Hz
-MAX_AGE = NIGHT_OUT_RAW               # older rows are dropped (they would be pruned anyway)
+# Older rows are dropped. One hour inside the 48 h night_out window, so every accepted row can still be
+# refreshed into the rollups (a refresh further back could erase other wearers' night_out minutes).
+MAX_AGE = NIGHT_OUT_RAW - timedelta(hours=1)
+# The 1-minute refresh policies cover the last 2 hours; a row older than this (less a margin for the
+# next policy run) would never reach the rollups by itself, so ingest refreshes its range.
+POLICY_WINDOW = timedelta(hours=2) - timedelta(minutes=10)
 MAX_AHEAD = timedelta(seconds=60)     # rows from the future beyond this are dropped
 ACCEL_LIMIT_MG = 32000.0              # +-16 g sensors report up to 16000 mg; allow headroom
 FSR_LIMIT_MV = 10000.0
@@ -76,7 +82,7 @@ def enmo_mg(ax: float, ay: float, az: float) -> float:
 @dataclass
 class Prepared:
     rows: list[tuple]      # ready for COPY
-    dropped: int           # outside [now - 48 h, now + 60 s]
+    dropped: int           # outside [now - 47 h, now + 60 s]
 
 
 def _num(v, limit: float, what: str, i: int, *, optional: bool = False) -> Optional[float]:
@@ -102,7 +108,7 @@ def prepare_rows(raw_rows: Sequence[Sequence], *, clock: str, now: datetime, use
       The row with t == device_ms_now (default: the largest t in the batch) is placed at server
       `now`; earlier rows go back by the difference. The server clock is the only clock.
     clock='epoch': t is Unix time in seconds or milliseconds (values above 1e11 are ms).
-    Rows that land outside [now - 48 h, now + 60 s] are counted in `dropped`, not stored.
+    Rows that land outside [now - 47 h, now + 60 s] are counted in `dropped`, not stored.
     """
     if profile not in PROFILES:
         raise BatchError(f"profile must be one of {PROFILES}")
@@ -331,6 +337,29 @@ async def refresh(conn, start: datetime, end: datetime) -> list[str]:
     return done
 
 
+async def refresh_backlog(conn, rows: Sequence[tuple]) -> list[str]:
+    """After a batch is committed: materialize its range when it has rows older than the refresh
+    policies' window, which would otherwise never reach the rollups. TimescaleDB only; autocommit
+    connection outside a transaction. Complete buckets only, and never ahead of the policies."""
+    if not rows:
+        return []
+    now = (await (await conn.execute("SELECT now() AS now")).fetchone())["now"]
+    oldest, newest = min(r[0] for r in rows), max(r[0] for r in rows)
+    if oldest >= now - POLICY_WINDOW or (await setup(conn))["mode"] != "timescaledb":
+        return []
+    done = []
+    for view, res in REFRESH_ORDER:
+        step = BUCKETS[res]
+        lo = max(_floor(oldest, step), _floor(now - MAX_AGE, step) + step)
+        hi = min(_floor(newest, step) + step, now - step)
+        if hi - lo < step:
+            continue  # recent enough for the real-time part of the query (or no complete bucket)
+        await conn.execute("CALL refresh_continuous_aggregate(%s::regclass, %s::timestamptz, %s::timestamptz)",
+                           (view, lo, hi))
+        done.append(view)
+    return done
+
+
 def _floor(t: datetime, step: timedelta) -> datetime:
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     secs = (t - epoch) // step
@@ -390,6 +419,11 @@ async def seed_synthetic(conn, user_id, *, start: datetime, end: datetime, profi
         raise ValueError("profile")
     if end <= start:
         raise ValueError("empty range")
+    if (await setup(conn))["mode"] == "timescaledb":
+        # Earlier synthetic rows may sit in compressed chunks (care rows stay 30 days); replacing them
+        # decompresses whole batches, more than TimescaleDB's default per-transaction limit of 100000
+        # rows for a 7-day baseline. Lift the limit for this transaction only.
+        await conn.execute("SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0")
     await conn.execute("""DELETE FROM hr_samples WHERE user_id = %s AND source = 'synthetic'
                            AND time >= %s AND time < %s""", (user_id, start, end))
     await conn.execute("""DELETE FROM scrunchie_telemetry WHERE user_id = %s AND simulated
@@ -527,7 +561,24 @@ async def _gaps_plain(conn, user_id, lo: datetime, hi: datetime) -> list[tuple[d
     return _clip(ranges, lo, hi)
 
 
+def _dead_between(live: list[tuple[datetime, datetime]], lo: datetime, hi: datetime) -> list[tuple[datetime, datetime]]:
+    """[lo, hi] minus the live ranges (sorted)."""
+    dead, cur = [], lo
+    for a, b in live:
+        if a > cur:
+            dead.append((cur, a))
+        cur = max(cur, b)
+    if cur < hi:
+        dead.append((cur, hi))
+    return dead
+
+
 async def _gaps_toolkit(conn, user_id, lo: datetime, hi: datetime) -> list[tuple[datetime, datetime]]:
+    """The live ranges of the rolled-up hourly heartbeat_agg, and everything else in [lo, hi] is dead.
+
+    The rollup only spans the hours that have samples, so its own dead_ranges() would miss the silence
+    before the first of them and after the last; and it ends a sample's liveness at the end of the last
+    hour with data, so the tail is extended to the last sample + 60 s, as the plain computation does."""
     row = await (await conn.execute(
         """SELECT rollup(hb) IS NULL AS empty FROM telemetry_heartbeat_1h
             WHERE user_id = %s AND bucket >= time_bucket(INTERVAL '1 hour', %s::timestamptz) AND bucket <= %s""",
@@ -535,12 +586,19 @@ async def _gaps_toolkit(conn, user_id, lo: datetime, hi: datetime) -> list[tuple
     if row is None or row["empty"]:
         return [(lo, hi)]
     rows = await (await conn.execute(
-        """SELECT d.start AS a, d."end" AS b
+        """SELECT l.start AS a, l."end" AS b
              FROM (SELECT rollup(hb) AS hb FROM telemetry_heartbeat_1h
                     WHERE user_id = %s AND bucket >= time_bucket(INTERVAL '1 hour', %s::timestamptz)
-                      AND bucket <= %s) x, dead_ranges(x.hb) d
-            ORDER BY d.start""", (user_id, lo, hi))).fetchall()
-    return _clip([(r["a"], r["b"]) for r in rows], lo, hi)
+                      AND bucket <= %s) x, live_ranges(x.hb) l
+            ORDER BY l.start""", (user_id, lo, hi))).fetchall()
+    live = [(r["a"], r["b"]) for r in rows]
+    last = (await (await conn.execute(
+        """SELECT max(time) AS t FROM scrunchie_telemetry
+            WHERE user_id = %s AND profile = 'care' AND time >= %s AND time <= %s""",
+        (user_id, lo - GAP_LIVENESS, hi))).fetchone())["t"]
+    if live and last is not None and last + GAP_LIVENESS > live[-1][1]:
+        live[-1] = (live[-1][0], last + GAP_LIVENESS)
+    return _dead_between(_clip(live, lo, hi), lo, hi)
 
 
 async def device_gaps(conn, user_id, *, hours: float = 24.0, method: Optional[str] = None) -> dict:

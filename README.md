@@ -353,7 +353,7 @@ imports nothing from the state machine, and the z-score is informational only (t
 | `hr_samples` (from `001`; gains `profile`, default `night_out`) | hypertable, 1-day chunks, existing rows migrated | table |
 | `hr_1m` → `hr_1h` → `hr_1d`, `telemetry_1m` → `telemetry_1h` → `telemetry_1d` | hierarchical continuous aggregates, real-time (`materialized_only = false`), refresh policies | views over the raw rows |
 | `user_zscore_5m` | view; Toolkit `stats_agg` when `timescaledb_toolkit` is installed | view (avg / stddev) |
-| `telemetry_heartbeat_1h` | Toolkit 1.15+ only: hourly real-time continuous aggregate of `heartbeat_agg` over care-profile telemetry, read with `rollup()` + `dead_ranges()` | not created; `GET /v1/telemetry/gaps` uses `lead()` over raw rows |
+| `telemetry_heartbeat_1h` | Toolkit 1.15+ only: hourly real-time continuous aggregate of `heartbeat_agg` over care-profile telemetry, read with `rollup()` + `live_ranges()` | not created; `GET /v1/telemetry/gaps` uses `lead()` over raw rows |
 | `timeseries_setup` | one row: `mode` (`timescaledb` or `plain`), `zscore_method`, `gaps_method`, and `note` (why setup took the plain path, if it did) | same |
 
 - **Ingest.** `POST /v1/telemetry/batch` takes up to 6000 rows (2 min at 50 Hz) and stores them with one
@@ -373,7 +373,8 @@ imports nothing from the state machine, and the z-score is informational only (t
   returns the bytes from `hypertable_columnstore_stats`. Measured on TimescaleDB 2.30.2 (Docker): telemetry
   46.1 MB → 4.9 MB (9.4×), heart rate 8.6 MB → 0.25 MB (33.9×). The data is synthetic.
 - **Device gaps.** `GET /v1/telemetry/gaps` lists where the scrunchie sent no care-profile data ("device sent
-  no data", 60 s liveness), from Toolkit `heartbeat_agg` → `dead_ranges` when Toolkit 1.15+ is installed.
+  no data", 60 s liveness), from Toolkit `heartbeat_agg` → `live_ranges` when Toolkit 1.15+ is installed (the
+  window minus the live ranges, so the silence before the first and after the last hour with data counts).
   Read-only: the server's check-in countdown stays the authority.
 - **Query times.** Each senior-mode card carries `query_ms`, the measured time of its own query.
 - **Connections.** A free Tiger service has 25 connections and no pooler. One API process holds at most
@@ -392,7 +393,9 @@ imports nothing from the state machine, and the z-score is informational only (t
   `DELETE /v1/me/data` erases the wearer's raw heart rate and raw telemetry at once. On TimescaleDB their
   rollup rows are not erased; they age out on the schedule above (daily rows are kept).
 - **Plain PostgreSQL.** Extensions are created only if `pg_available_extensions` lists them, inside a
-  `DO` block that catches errors. Every TimescaleDB call sits in one `DO` block behind a `pg_extension`
+  `DO` block that catches errors, and `timescaledb` only when its library is preloaded
+  (`shared_preload_libraries`): installed but not preloaded, `CREATE EXTENSION` would end the session, so the
+  plain objects are used and `timeseries_setup.note` says why. Every TimescaleDB call sits in one `DO` block behind a `pg_extension`
   check and runs as one sub-transaction: if any part fails, it is rolled back, the plain tables and views
   are created instead and `timeseries_setup.note` says why. With no scheduler, the app prunes raw rows
   itself, at most every 10 minutes, from the timer worker. The plain rollups are views, so they only cover raw

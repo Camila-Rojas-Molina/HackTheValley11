@@ -1,7 +1,8 @@
 -- Research 4.3: a "device sent no data" timeline for the care team (care profile), read-only. The
 -- server's check-in countdown stays the authority; nothing here changes a session.
 -- With TimescaleDB and Toolkit 1.15 or later: an hourly real-time continuous aggregate of
--- heartbeat_agg (a sample keeps the device "live" for 60 s), rolled up and read with dead_ranges().
+-- heartbeat_agg (a sample keeps the device "live" for 60 s), rolled up and read with live_ranges()
+-- (app/timeseries.py: the window minus the live ranges).
 -- Verified on TimescaleDB 2.30.2 + Toolkit 1.26.0, including inside a continuous aggregate.
 -- Anywhere else, app/timeseries.py computes the same ranges with lead() over the raw rows.
 ALTER TABLE timeseries_setup ADD COLUMN gaps_method text NOT NULL DEFAULT 'plain_lag';

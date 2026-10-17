@@ -10,7 +10,8 @@ from __future__ import annotations
 import pytest
 
 from app import states, timers
-from tests.conftest import DURESS_PIN, PIN, fire, make_world, outbox, pending_timers, session_row, to_state
+from tests.conftest import (DURESS_PIN, PIN, expire_leases, fire, make_world, outbox, pending_timers, session_row,
+                            to_state)
 
 
 @pytest.fixture
@@ -59,10 +60,7 @@ async def test_false_alarm_entry_is_identical_for_real_and_duress_pin(client, db
     real, duress = await make_world(client, db), await make_world(client, db)
     for w in (real, duress):
         await client.post("/v1/device/heartbeat", headers=w.device(), json={})
-        async with db.connection() as conn:
-            await conn.execute("UPDATE devices SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
-                               (w.device_id,))
-    await timers.check_leases(db, ctx)
+    await expire_leases(db, ctx, real, duress)
     for w in (real, duress):
         assert (await session_row(db, w.session_id))["link_state"] == states.LINK_LOST
         await fire(db, ctx, w.session_id, states.LOST_CONTACT_NOTIFY)
@@ -264,11 +262,7 @@ async def test_device_unplugged_after_a_duress_pin_messages_the_wearer_like_the_
     for w in (real, duress):
         await client.post("/v1/device/heartbeat", headers=w.device(), json={})
     await cancel_both(client, real, duress, action=action)
-    async with db.connection() as conn:
-        for w in (real, duress):
-            await conn.execute("UPDATE devices SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
-                               (w.device_id,))
-    await timers.check_leases(db, ctx)
+    await expire_leases(db, ctx, real, duress)
     for w in (real, duress):
         await client.post("/v1/device/heartbeat", headers=w.device(), json={})  # plugged back in
 

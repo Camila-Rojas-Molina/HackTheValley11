@@ -649,7 +649,10 @@ Auth: the device key plus `X-Device-Id`, or the wearer key. Stored with one `COP
 {"ok":true,"duplicate":true,"inserted":4,"dropped":0}
 ```
 
-- `dropped` counts rows that land outside server time − 48 h … + 60 s.
+- `dropped` counts rows that land outside server time − 47 h … + 60 s (an hour inside the 48 h `night_out`
+  window, so every accepted row can still be refreshed into the rollups).
+- A backlog (rows older than the 1-minute refresh policies' 2-hour window) is refreshed into the 1 min, 1 h
+  and 1 d rollups by the batch call itself on TimescaleDB, so every accepted row reaches them.
 - A malformed row is `422`, for example `{"detail":"row 0: expected [t, ax_mg, ay_mg, az_mg, fsr_a_mv?, fsr_b_mv?]"}`.
 - 3000 rows (60 s at 50 Hz): median 28 ms per HTTP round trip over 5 runs, against a local TimescaleDB
   2.30.2 / PostgreSQL 18.6 container.
@@ -695,9 +698,11 @@ Wearer key (own data) or `X-Admin-Key` (`?user_id=`, default the demo wearer). `
 24. A read-only "device sent no data" timeline for the care team (care profile): a sample counts as data for
 60 s, and every longer silence is a dead range. The server's check-in countdown stays the authority; this
 view never changes a session. With TimescaleDB and Toolkit 1.15+ it reads an hourly real-time continuous
-aggregate of `heartbeat_agg` with `rollup()` and `dead_ranges()` (`method: toolkit_heartbeat_agg`, verified on
-TimescaleDB 2.30.2 + Toolkit 1.26.0); otherwise it computes the same ranges with `lead()` over the raw rows
-(`method: plain_lag`). Contact tokens have no access.
+aggregate of `heartbeat_agg` with `rollup()` and `live_ranges()` (`method: toolkit_heartbeat_agg`, verified on
+TimescaleDB 2.30.2 + Toolkit 1.26.0): everything in the window outside the live ranges is dead, including the
+silence before the first hour with data and after the last one, and the last sample keeps its 60 s even past
+an hour boundary. Otherwise it computes the same ranges with `lead()` over the raw rows (`method: plain_lag`).
+Contact tokens have no access.
 
 ```json
 {"user_id":"…","label":"device sent no data","method":"toolkit_heartbeat_agg","liveness_s":60.0,"profile":"care",
@@ -775,7 +780,9 @@ The ratio depends on the data: these rows come from the synthetic generator, not
 `X-Admin-Key`. Seeds a labelled SYNTHETIC baseline (`simulated: true`, heart-rate `source` `synthetic`) so
 the z-score has 7 days to compare against. Body (all optional): `user_id` (default the demo wearer; `404`
 if unknown), `days` (≤ 7, default 7), `until_minutes_ago` (default 5), `profile`, `hr_every_s` (default 10),
-`motion_every_s` (default 1). For demo databases only: it refreshes its whole range for every user.
+`motion_every_s` (default 1). For demo databases only: it refreshes its whole range for every user. It can be
+run again over chunks the columnstore has already compressed (the transaction lifts TimescaleDB's
+per-transaction decompression limit to replace the earlier synthetic rows).
 
 ```json
 {"ok":true,"user_id":"5beca34f-…","from":"2026-10-10T08:02:46.589878+00:00","to":"2026-10-17T08:02:46.589878+00:00",

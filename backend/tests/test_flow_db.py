@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 
 from app import audit, states, timers
-from tests.conftest import (ADMIN_KEY, DURESS_PIN, PIN, deliver_all, fire, make_world, open_alert, outbox,
-                            pending_timers, session_row, to_state)
+from tests.conftest import (ADMIN_KEY, DURESS_PIN, PIN, deliver_all, expire_leases, fire, make_world, open_alert,
+                            outbox, pending_timers, session_row, to_state)
 
 
 async def test_migrations_and_health(client):
@@ -337,10 +337,7 @@ async def test_lost_contact_notice_and_restore(client, db, ctx):
     sid = w.session_id
     hb = await client.post("/v1/device/heartbeat", headers=w.device(), json={"enmo60_mg": 3})
     assert hb.status_code == 200
-    async with db.connection() as conn:
-        await conn.execute("UPDATE devices SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
-                           (w.device_id,))
-    assert await timers.check_leases(db, ctx) >= 1
+    await expire_leases(db, ctx, w)
     s = await session_row(db, sid)
     assert s["link_state"] == "LOST_CONTACT" and s["state"] == states.ARMED
     kinds = [t["kind"] for t in await pending_timers(db, sid)]
@@ -373,10 +370,7 @@ async def test_lost_contact_during_alert_keeps_escalating(client, db, ctx):
     sid = w.session_id
     await client.post("/v1/device/heartbeat", headers=w.device(), json={})
     await to_state(client, db, ctx, w, "ESCALATED_L1")
-    async with db.connection() as conn:
-        await conn.execute("UPDATE devices SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
-                           (w.device_id,))
-    await timers.check_leases(db, ctx)
+    await expire_leases(db, ctx, w)
     c1 = w.contacts[0]
     assert (await outbox(db, sid, contact_id=c1["id"]))[-1]["template"] == "lost_contact"  # immediately
     await fire(db, ctx, sid, states.ACK_TIMEOUT)  # deadline still fires

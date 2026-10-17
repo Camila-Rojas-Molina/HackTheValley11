@@ -8,7 +8,7 @@ POST /v1/telemetry/batch        raw accelerometer + FSR rows, stored with COPY
             profile: "night_out" (default; raw kept 48 h) | "care" (raw kept 30 days),
             simulated: false, batch_id?: retry key (repeated by the same sender, stored once),
             device_id?: with the wearer key, one of the wearer's own devices}
-     reply: {ok, duplicate, inserted, dropped}   (dropped = rows outside now - 48 h .. now + 60 s)
+     reply: {ok, duplicate, inserted, dropped}   (dropped = rows outside now - 47 h .. now + 60 s)
 GET  /v1/telemetry/zscore       last 5 min vs the user's own 7-day baseline, per metric
 GET  /v1/telemetry/aggregates   ?series=hr|motion&resolution=1m|1h|1d&hours=N
      reads: wearer key (own data) or X-Admin-Key (?user_id=; zscore without it lists every user,
@@ -130,6 +130,9 @@ async def ingest_batch(request: Request, body: BatchIn, background: BackgroundTa
                 raise HTTPException(422, str(exc)) from None
             result = await timeseries.ingest(conn, prepared, user_id=user_id, device_id=device_id,
                                              batch_id=body.batch_id)
+        if result["inserted"] and not result["duplicate"]:
+            # A backlog older than the refresh policies' window reaches the rollups now (TimescaleDB).
+            await timeseries.refresh_backlog(conn, prepared.rows)
     background.add_task(timeseries.maybe_prune, db)
     return result
 

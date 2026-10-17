@@ -563,6 +563,8 @@ async def test_compression_demo_needs_the_operator_key(client):
 
 async def test_compression_demo_on_plain_postgres_says_so_and_writes_nothing(client, db):
     async with db.connection() as conn:
+        if (await timeseries.setup(conn))["mode"] != "plain":
+            pytest.skip("plain PostgreSQL only (test_timeseries_tsdb.py covers TimescaleDB)")
         before = (await (await conn.execute("SELECT count(*) AS n FROM scrunchie_telemetry")).fetchone())["n"]
     r = await client.post("/v1/telemetry/compression-demo", headers={"X-Admin-Key": ADMIN_KEY}, json={"days": 2})
     assert r.status_code == 200, r.text
