@@ -110,7 +110,8 @@ docker compose down -v                        # stop and delete the local databa
 ## Tests
 
 ```bash
-cd backend && ../.venv/bin/python -m pytest -q
+cd backend && ../.venv/bin/python -m pytest -q                          # everything, about 5 minutes
+cd backend && ../.venv/bin/python -m pytest -q -m "not chaos and not ops"   # fast suite, about 1 minute
 ```
 
 - Unit tests need nothing.
@@ -119,6 +120,10 @@ cd backend && ../.venv/bin/python -m pytest -q
   another server, such as the TimescaleDB container.
 - `tests/test_chaos_kill9.py` starts a real server, `kill -9`s it mid-REMINDED, restarts it and checks that
   L1 fires once, within 2 s of the stored deadline.
+- `tests/test_ops_live.py` runs the demo-night paths for real, each against its own server and database:
+  `scripts/simulate.py` (all seven KAZE scenarios plus the PCC seed, `ops`), `scripts/bridge.py --stdin`
+  forwarding `R` lines into `scrunchie_telemetry` (`ops`), and `scripts/serve.sh` with
+  `scripts/chaos.sh mid-reminded` (`chaos`: the restart loop brings the killed server back and L1 fires once).
 - `tests/test_pages_js.py` runs the pages' JavaScript in Node; it is skipped without Node.
 - `tests/test_wording.py` greps every shipped file, this README and `docs/` for banned wording.
 - `tests/test_vultr.py` checks:
@@ -314,15 +319,15 @@ Notes:
 |---|---|---|
 | Durable countdown: L1 → L2, ACKED follow-up, `kill -9` resume | **Demonstrated** (`test_chaos_kill9.py`, `chaos.sh`) | At-least-once delivery: a crash between Telegram accepting a message and the row being marked sent sends it once more (tested); a mark that keeps failing does not re-send. Tested with one worker. |
 | ESCALATED_FINAL ("would contact 911 / campus safety") | **Simulated, never placed** | A real escalation partner and protocol |
-| Telegram nudges, alerts and buttons; contact web page | **Demonstrated** once a bot token is set; log channel without one | Contacts must have started the bot. Bot chats are not end-to-end encrypted, so alert text carries no health data. |
+| Telegram nudges, alerts and buttons; contact web page | **Demonstrated** once a bot token is set; log channel without one. The contact page runs end to end in headless Chrome (`test_ops_live.py`: consent tap, muted looping alarm, red ringing alert, "I'm on it", "she's safe") | Contacts must have started the bot. Bot chats are not end-to-end encrypted, so alert text carries no health data. Not yet run against the live Bot API, and not on an iPhone (mute switch, audio session, screen lock). |
 | Wearer approves contacts; single-use 10-min invites (web and Telegram, both tested); silent removal | **Demonstrated** | Coercive-control scenarios need expert review |
 | Squeeze OK / duress / counted challenge | **Demonstrated** over the line protocol (`bridge.py --stdin`, `simulate.py`) | On the real squeeze sensor it depends on the firmware; learnability is untested |
 | Lost contact, distinct from no response | **Demonstrated** (unplug; heartbeats stop) | Lease length and grace period in real use |
-| Live heart rate from the wearer's Apple Watch (HeartCast → `/hr-bridge` → `/v1/hr`) | **Demonstrated** (data path) | About 5 s updates; the iPhone relay must stay connected |
+| Live heart rate from the wearer's Apple Watch (HeartCast → `/hr-bridge` → `/v1/hr`) | **Demonstrated** (data path: `parseHRM` on byte vectors, `/v1/hr`, and the page's SIM fallback in headless Chrome) | About 5 s updates; the iPhone relay must stay connected. The Web Bluetooth connect and reconnect need HeartCast on an iPhone and were not run here |
 | Heart rate different from her usual → early check-in | **Simulated** (SIM source, `simulated: true`, badged) | Thresholds and false-prompt rate are untested assumptions |
 | HRV / RMSSD | **Not built** | RR intervals are stored when present |
 | Head position change → early check-in | **Demonstrated** as a device event; operator injection as fallback | Resting the head looks the same; thresholds are not validated |
-| Fall-like motion | **Simulated** (operator injection) | Wrist and hair placements are weak for this |
+| Fall-like motion | **Simulated** (operator injection, logged `actor: demo`, `simulated: true`) | Wrist and hair placements are weak for this |
 | Location | **Simulated** by default (fixed UTSC coordinates, labelled); last-known from a wearer check-in (`POST /v1/sessions/{session_id}/checkin`) | A web page cannot read position while hidden; needs a native app |
 | Timers in seconds | **Simulated compression** (demo profile) | The real profile uses minutes |
 | Transport | **Demonstrated tethered** over USB serial | Production would use BLE to the phone |

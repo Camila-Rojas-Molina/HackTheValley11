@@ -201,8 +201,10 @@ async def checkin_now(request: Request):
 async def inject(request: Request, body: InjectIn):
     require_admin(request)
     ctx = get_ctx(request)
-    pf = {"head_position": rules.head_position_rule, "fall_like": rules.fall_like_rule,
-          "offbody": rules.offbody_rule}[body.kind]()
+    rule = {"head_position": rules.head_position_rule, "fall_like": rules.fall_like_rule,
+            "offbody": rules.offbody_rule}[body.kind]
+    # An operator injection is simulated motion (BUILD_PLAN §9): the timeline entry says so, next to actor=demo.
+    pf = rules.PullForward(rule().reason, rule().level, simulated=True)
     async with get_db(request).connection() as conn:
         async with conn.transaction():
             user = await _demo_user(conn, ctx)
