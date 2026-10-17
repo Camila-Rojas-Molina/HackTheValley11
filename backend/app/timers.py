@@ -121,6 +121,8 @@ async def timer_worker(db, ctx: Ctx, stop: asyncio.Event, tick_s: float = 1.0) -
             # Plain PostgreSQL has no scheduler: raw-row retention (night_out 48 h) runs from here,
             # at most every 10 minutes, whatever the ingest path. A no-op on TimescaleDB.
             await timeseries.maybe_prune(db)
+            # Real locations older than 48 h (research 1.15), at most every 10 minutes.
+            await engine.maybe_purge_locations(db)
         except asyncio.CancelledError:
             raise
         except Exception:

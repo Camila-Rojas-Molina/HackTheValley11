@@ -530,7 +530,11 @@ in the database itself, so anyone holding the database can read the coordinates 
 - `expires_at` is null while the alert is open.
 - After expiry: `410 {"error": "gone", "detail": "This location link has expired."}`.
 - Sealed under an earlier `APP_SECRET`: `410 {"error": "gone", "detail": "This location is no longer available."}`.
-- Unknown token: `404`.
+- Unknown token: `404`, which is also the answer once retention has deleted an expired link.
+- No location history: each new location replaces every earlier one that no alert released. Real
+  locations are deleted 48 h after capture (the timer worker checks every 10 minutes) unless an open alert
+  still holds them; links that expired more than 48 h ago are deleted too. The simulated demo location is
+  not personal data and is kept.
 
 ## 7. Operator and demo
 

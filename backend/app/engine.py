@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -143,13 +144,59 @@ def build_snapshot(sess: dict, alert: Optional[dict], contacts: list[dict], reci
 
 
 # --- location -----------------------------------------------------------------
+# Location privacy (research 1.15): only the last-known location is kept (no history), plus the
+# copy each alert released; real locations are deleted 48 h after capture (the night-out raw-data
+# window) unless an open alert still holds them. The simulated demo location is not personal data.
+LOCATION_RETENTION_H = 48
+LOCATION_PURGE_EVERY_S = 600.0
+_last_location_purge: dict[str, float] = {}
+
+
 async def record_location(conn, ctx: Ctx, *, user_id, session_id, lat: float, lon: float,
                           accuracy_m: Optional[float], source: str, simulated: bool) -> int:
     row = await (await conn.execute(
         """INSERT INTO location_snapshots (user_id, session_id, coords_enc, accuracy_m, source, simulated)
            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
         (user_id, session_id, encrypt_coords(ctx.secret, lat, lon), accuracy_m, source, simulated))).fetchone()
+    # No location history: the new one replaces every earlier one no alert has released.
+    await conn.execute(
+        """DELETE FROM location_snapshots s WHERE s.user_id = %s AND s.id <> %s
+              AND NOT EXISTS (SELECT 1 FROM location_shares ls WHERE ls.snapshot_id = s.id)""",
+        (user_id, row["id"]))
     return row["id"]
+
+
+async def purge_locations(conn) -> dict:
+    """Delete real locations captured more than LOCATION_RETENTION_H ago (and their released links),
+    unless an open alert still holds them, and links that expired that long ago."""
+    snaps = await conn.execute(
+        """DELETE FROM location_snapshots s
+            WHERE NOT s.simulated AND s.captured_at < now() - make_interval(hours => %s)
+              AND NOT EXISTS (SELECT 1 FROM location_shares ls JOIN alerts a ON a.id = ls.alert_id
+                               WHERE ls.snapshot_id = s.id AND a.status IN ('OPEN', 'ACKED'))""",
+        (LOCATION_RETENTION_H,))
+    shares = await conn.execute(
+        """DELETE FROM location_shares
+            WHERE expires_at IS NOT NULL AND expires_at < now() - make_interval(hours => %s)""",
+        (LOCATION_RETENTION_H,))
+    return {"snapshots": snaps.rowcount, "shares": shares.rowcount}
+
+
+async def maybe_purge_locations(db) -> bool:
+    """From the timer worker: at most every 10 minutes per database. Best effort."""
+    key = db.conninfo
+    now = time.monotonic()
+    if now - _last_location_purge.get(key, -1e9) < LOCATION_PURGE_EVERY_S:
+        return False
+    _last_location_purge[key] = now
+    try:
+        async with db.connection() as conn:
+            async with conn.transaction():
+                await purge_locations(conn)
+        return True
+    except Exception as exc:
+        log.warning("location purge failed: %s", type(exc).__name__)
+        return False
 
 
 def location_token(ctx: Ctx, alert_id: int, nonce: str) -> str:
