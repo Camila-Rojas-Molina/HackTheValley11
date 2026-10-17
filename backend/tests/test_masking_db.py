@@ -340,3 +340,12 @@ async def test_export_head_hash_recomputes_from_the_visible_entries_for_both_pin
         if action == "end":
             msg = [t for t in await wearer_texts(db, w) if t.startswith("Ended ✓")][-1]
             assert msg == f"Ended ✓ Timeline head: {s['head_hash'][:16]}", w is duress
+
+
+async def test_export_shows_ended_at_after_either_pin(client, db, ctx):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress, action="end")
+    ex_r = (await client.get("/v1/me/export", headers=real.wearer)).json()["sessions"]
+    ex_d = (await client.get("/v1/me/export", headers=duress.wearer)).json()["sessions"]
+    assert ex_r[-1]["ended_at"] is not None and ex_d[-1]["ended_at"] is not None
+    assert [sorted(s) for s in ex_r] == [sorted(s) for s in ex_d]

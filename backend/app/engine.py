@@ -222,7 +222,8 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
                                  WHEN %(stamp)s::text = 'prompted_at' THEN NULL ELSE reminded_at END,
               lost_contact_at = CASE WHEN %(lost)s::boolean IS TRUE THEN now()
                                      WHEN %(lost)s::boolean IS FALSE THEN NULL ELSE lost_contact_at END,
-              ended_at = CASE WHEN %(to)s::text = 'ENDED' THEN now() ELSE ended_at END,
+              ended_at = CASE WHEN %(to)s::text = 'ENDED' OR %(pub)s::text = 'ENDED'  -- ended, or looks it
+                              THEN coalesce(ended_at, now()) ELSE ended_at END,
               updated_at = now()
             WHERE id = %(id)s AND version = %(v)s AND state = %(from)s
         RETURNING prompted_at, reminded_at""",
