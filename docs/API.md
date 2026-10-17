@@ -699,6 +699,31 @@ first, for a backfill that landed behind the refresh policies. A no-op on plain 
  "from":"2026-10-17T06:08:11.587100+00:00","to":"2026-10-17T08:08:11.587100+00:00"}
 ```
 
+### `POST /v1/telemetry/compression-demo`
+
+`X-Admin-Key`. A compression ratio that is actually measured. The columnstore policy only converts chunks
+older than a day on a daily schedule, so a weekend demo compresses nothing on its own. This writes `days`
+(1–6, default 3) of SYNTHETIC care-profile telemetry (`motion_every_s`, default 1 Hz; heart rate every
+`hr_every_s`, default 5 s) ending 25 h ago, calls `convert_to_columnstore` on every chunk older than a day,
+and reads the bytes back from `hypertable_columnstore_stats`. The care profile keeps raw rows 30 days
+(night_out only 48 h). The rollups are not refreshed over this backdated range. On plain PostgreSQL it
+writes nothing and answers `"available": false`. Body optional: `{"user_id": "…", "days": 3}`.
+
+Measured on TimescaleDB 2.30.2 (Docker, `timescale/timescaledb-ha:pg18`) with the defaults:
+
+```json
+{"mode":"timescaledb","available":true,"synthetic":true,"profile":"care",
+ "rows":{"hr_rows":51840,"motion_rows":259200,"simulated":true},
+ "tables":[{"hypertable":"scrunchie_telemetry","total_chunks":4,"number_compressed_chunks":3,
+            "before_compression_total_bytes":46055424,"after_compression_total_bytes":4923392,"ratio":9.4,
+            "chunks_converted":3},
+           {"hypertable":"hr_samples","total_chunks":4,"number_compressed_chunks":3,
+            "before_compression_total_bytes":8609792,"after_compression_total_bytes":253952,"ratio":33.9,
+            "chunks_converted":3}], "…": "…"}
+```
+
+The ratio depends on the data: these rows come from the synthetic generator, not from a person.
+
 ### `POST /v1/telemetry/synthetic`
 
 `X-Admin-Key`. Seeds a labelled SYNTHETIC baseline (`simulated: true`, heart-rate `source` `synthetic`) so

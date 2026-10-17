@@ -554,3 +554,27 @@ async def test_zscore_for_one_wearer_reads_only_that_wearers_raw_rows(db):
     assert scans
     for s in scans:
         assert s["Actual Rows"] * s.get("Actual Loops", 1) <= 120, (s["Node Type"], s["Relation Name"], s["Actual Rows"])
+
+
+# --- research 4.2: a real compression ratio from backdated synthetic care-profile telemetry -----------
+async def test_compression_demo_needs_the_operator_key(client):
+    assert (await client.post("/v1/telemetry/compression-demo")).status_code == 401
+
+
+async def test_compression_demo_on_plain_postgres_says_so_and_writes_nothing(client, db):
+    async with db.connection() as conn:
+        before = (await (await conn.execute("SELECT count(*) AS n FROM scrunchie_telemetry")).fetchone())["n"]
+    r = await client.post("/v1/telemetry/compression-demo", headers={"X-Admin-Key": ADMIN_KEY}, json={"days": 2})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "plain" and body["available"] is False and "TimescaleDB" in body["note"]
+    async with db.connection() as conn:
+        after = (await (await conn.execute("SELECT count(*) AS n FROM scrunchie_telemetry")).fetchone())["n"]
+    assert after == before
+
+
+def test_compression_demo_window_is_backdated_past_the_columnstore_policy():
+    now = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+    start, end = timeseries.compression_window(now, days=3)
+    assert end == now - timedelta(days=1, hours=1) and start == end - timedelta(days=3)
+    assert timeseries.COMPRESSION_PROFILE == "care"          # night_out raw rows are deleted after 48 h

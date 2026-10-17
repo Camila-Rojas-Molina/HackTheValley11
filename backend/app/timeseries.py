@@ -417,3 +417,75 @@ async def seed_synthetic(conn, user_id, *, start: datetime, end: datetime, profi
                                    make_interval(secs => %s)) AS t""",
         (user_id, profile, start, end, motion_every_s))
     return {"hr_rows": hr.rowcount, "motion_rows": mo.rowcount, "simulated": True}
+
+
+# --- columnstore proof (research 4.2) ----------------------------------------------------------------
+# The columnstore policy converts a chunk only once it is older than the 1-day chunk interval, on a
+# daily schedule, so a weekend demo compresses nothing on its own, and tiny tables can even grow.
+# compression_demo() writes several days of SYNTHETIC care-profile telemetry that end more than a day
+# ago (care raw rows are kept 30 days; night_out ones only 48 h), converts every chunk older than a day
+# with convert_to_columnstore, and reads the real before/after bytes from hypertable_columnstore_stats.
+COMPRESSION_PROFILE = "care"
+COMPRESSED_TABLES = ("scrunchie_telemetry", "hr_samples")
+
+
+def compression_window(now: datetime, days: float) -> tuple[datetime, datetime]:
+    """[start, end): `days` of data ending 25 h ago, so every chunk is past the 1-day policy age."""
+    end = now - timedelta(days=1, hours=1)
+    return end - timedelta(days=days), end
+
+
+async def convert_old_chunks(conn, older_than: timedelta = timedelta(days=1)) -> dict:
+    """CALL convert_to_columnstore on every chunk older than `older_than`. Autocommit, no transaction."""
+    done = {}
+    for table in COMPRESSED_TABLES:
+        chunks = [r["c"] for r in await (await conn.execute(
+            "SELECT show_chunks(%s::regclass, older_than => %s::interval)::text AS c", (table, older_than))).fetchall()]
+        for chunk in chunks:
+            await conn.execute("CALL convert_to_columnstore(%s::regclass, if_not_columnstore => true)", (chunk,))
+        done[table] = len(chunks)
+    return done
+
+
+async def columnstore_stats(conn) -> list[dict]:
+    out = []
+    for table in COMPRESSED_TABLES:
+        r = await (await conn.execute(
+            """SELECT total_chunks, number_compressed_chunks, before_compression_total_bytes,
+                      after_compression_total_bytes
+                 FROM hypertable_columnstore_stats(%s::regclass)""", (table,))).fetchone()
+        row = {"hypertable": table, **(dict(r) if r else {})}
+        before, after = row.get("before_compression_total_bytes"), row.get("after_compression_total_bytes")
+        row["ratio"] = round(before / after, 1) if before and after else None
+        out.append(row)
+    return out
+
+
+async def compression_demo(conn, user_id, *, days: float = 3.0, motion_every_s: float = 1.0,
+                           hr_every_s: float = 5.0) -> dict:
+    """Backdated SYNTHETIC care-profile telemetry, converted to the columnstore: a measured ratio.
+
+    TimescaleDB only; on plain PostgreSQL it writes nothing. Call on an autocommit connection
+    outside a transaction. The rollups are not refreshed over this backdated range (a refresh there
+    would recompute other wearers' 'night_out' minutes whose raw rows are already pruned).
+    """
+    if (await setup(conn))["mode"] != "timescaledb":
+        return {"mode": "plain", "available": False, "synthetic": True,
+                "note": "The columnstore needs TimescaleDB; nothing was written on plain PostgreSQL."}
+    now = (await (await conn.execute("SELECT now() AS now")).fetchone())["now"]
+    start, end = compression_window(now, days)
+    async with conn.transaction():
+        # A re-run replaces this wearer's earlier synthetic rows in the window, which may sit in
+        # compressed chunks: let this one transaction decompress as many as that takes.
+        await conn.execute("SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0")
+        rows = await seed_synthetic(conn, user_id, start=start, end=end, profile=COMPRESSION_PROFILE,
+                                    hr_every_s=hr_every_s, motion_every_s=motion_every_s)
+    converted = await convert_old_chunks(conn)
+    tables = await columnstore_stats(conn)
+    for t in tables:
+        t["chunks_converted"] = converted.get(t["hypertable"], 0)
+    return {"mode": "timescaledb", "available": True, "synthetic": True, "profile": COMPRESSION_PROFILE,
+            "user_id": str(user_id), "from": start.isoformat(), "to": end.isoformat(), "rows": rows,
+            "tables": tables,
+            "note": ("Measured by hypertable_columnstore_stats over every compressed chunk of each hypertable; "
+                     "the data is SYNTHETIC and labelled simulated.")}

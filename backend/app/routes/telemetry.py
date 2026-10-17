@@ -15,6 +15,9 @@ GET  /v1/telemetry/aggregates   ?series=hr|motion&resolution=1m|1h|1d&hours=N
      aggregates without it use the demo wearer). Contact tokens have no access.
 GET  /v1/telemetry/info         (X-Admin-Key) TimescaleDB or plain path, versions, rollups, jobs
 POST /v1/telemetry/refresh      (X-Admin-Key) {hours <= 47}: materialize the rollups for a backfill
+POST /v1/telemetry/compression-demo  (X-Admin-Key) {user_id?, days, motion_every_s, hr_every_s}: backdated
+                                SYNTHETIC care-profile telemetry converted with convert_to_columnstore; returns
+                                the measured before/after bytes and ratio (TimescaleDB only; research 4.2)
 POST /v1/telemetry/synthetic    (X-Admin-Key) {user_id?, days, profile, ...}: labelled SYNTHETIC
                                 baseline so the z-score has 7 days to compare against. Demo
                                 databases only: it refreshes its whole range for every user, which
@@ -53,6 +56,13 @@ class RefreshIn(BaseModel):
     # Under 48 h: 'night_out' raw rows exist for that long, so this can never erase summaries
     # whose raw rows are already pruned. /v1/telemetry/synthetic refreshes its own older range.
     hours: float = Field(default=46.0, gt=0, le=47)
+
+
+class CompressionDemoIn(BaseModel):
+    user_id: Optional[uuid.UUID] = None
+    days: float = Field(default=3.0, ge=1.0, le=6.0)
+    motion_every_s: float = Field(default=1.0, ge=0.5, le=10.0)
+    hr_every_s: float = Field(default=5.0, ge=1.0, le=60.0)
 
 
 class SyntheticIn(BaseModel):
@@ -173,6 +183,20 @@ async def telemetry_refresh(request: Request, body: Optional[RefreshIn] = None):
         done = await timeseries.refresh(conn, start, now)
         mode = (await timeseries.setup(conn))["mode"]
     return {"ok": True, "mode": mode, "refreshed": done, "from": start.isoformat(), "to": now.isoformat()}
+
+
+@router.post("/v1/telemetry/compression-demo")
+async def telemetry_compression_demo(request: Request, body: Optional[CompressionDemoIn] = None):
+    """research 4.2: a real compression ratio. Autocommit connection: convert_to_columnstore is a procedure."""
+    require_admin(request)
+    body = body or CompressionDemoIn()
+    async with get_db(request).connection() as conn:
+        user_id = str(body.user_id) if body.user_id else await _demo_user_id(conn)
+        if body.user_id and not await (await conn.execute("SELECT 1 FROM users WHERE id = %s",
+                                                          (user_id,))).fetchone():
+            raise HTTPException(404, "no such user")
+        return await timeseries.compression_demo(conn, user_id, days=body.days, motion_every_s=body.motion_every_s,
+                                                 hr_every_s=body.hr_every_s)
 
 
 @router.post("/v1/telemetry/synthetic")

@@ -280,3 +280,20 @@ async def test_copy_ingest_lands_in_the_hypertable(conn):
     r = await (await conn.execute(
         "SELECT sum(n)::bigint AS n FROM telemetry_1m WHERE user_id = %s", (u,))).fetchone()
     assert r["n"] == 500
+
+
+async def test_compression_demo_gives_a_real_ratio(conn):
+    """research 4.2: several backdated days of SYNTHETIC care-profile telemetry at 1 Hz, converted to
+    the columnstore chunk by chunk, read back from hypertable_columnstore_stats."""
+    user = await _user(conn)
+    out = await timeseries.compression_demo(conn, user, days=2, motion_every_s=1.0, hr_every_s=5.0)
+    assert out["mode"] == "timescaledb" and out["available"] is True and out["synthetic"] is True
+    assert out["profile"] == "care" and out["rows"]["motion_rows"] >= 2 * 86400 - 10
+    tables = {t["hypertable"]: t for t in out["tables"]}
+    tel = tables["scrunchie_telemetry"]
+    assert tel["chunks_converted"] >= 2 and tel["number_compressed_chunks"] >= 2
+    assert tel["before_compression_total_bytes"] > tel["after_compression_total_bytes"] > 0
+    assert tel["ratio"] == round(tel["before_compression_total_bytes"] / tel["after_compression_total_bytes"], 1)
+    assert tel["ratio"] > 2
+    again = await timeseries.compression_demo(conn, user, days=2, motion_every_s=1.0, hr_every_s=5.0)
+    assert {t["hypertable"]: t for t in again["tables"]}["scrunchie_telemetry"]["number_compressed_chunks"] >= 2
