@@ -386,3 +386,63 @@ async def test_public_health_does_not_change_with_a_duress_pin(client, db, ctx):
     op = (await client.get("/v1/health", headers={"X-Admin-Key": ADMIN_KEY})).json()
     assert isinstance(op["pending_timers"], int) and isinstance(op["pending_outbox"], int)
     assert "pending_timers" not in (await client.get("/v1/health", headers={"X-Admin-Key": "wrong"})).json()
+
+
+async def test_delete_my_data_during_an_open_alert_keeps_the_contacts_link_and_matches_the_twin(client, db, ctx):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress)
+    c1 = duress.contacts[0]
+    link = (await client.get(f"/v1/contact/{c1['token']}/status")).json()["alert"]["location"]["link"]
+    share = link.rsplit("/l/", 1)[1]
+    assert (await client.get(f"/l/{share}")).status_code == 200
+    er = await client.delete("/v1/me/data", headers=real.wearer)
+    ed = await client.delete("/v1/me/data", headers=duress.wearer)
+    assert er.status_code == ed.status_code == 200 and er.content == ed.content
+    # The released location stays reachable for the contacts while the alert is open...
+    assert (await client.get(f"/l/{share}")).status_code == 200
+    st = (await client.get(f"/v1/contact/{c1['token']}/status")).json()["alert"]
+    assert st["status"] == "OPEN" and st["location"] is not None
+    # ...and the alert's hidden entries are kept until it closes.
+    async with db.connection() as conn:
+        kept = await (await conn.execute(
+            """SELECT a.kind FROM audit_log a JOIN alerts al ON al.id = a.alert_id
+                WHERE a.session_id = %s AND a.masked AND al.status = 'OPEN'""", (duress.session_id,))).fetchall()
+    assert {"duress", "escalated"} <= {r["kind"] for r in kept}
+    # The wearer's own views match the real-PIN twin's after the erase.
+    assert await visible(client, real) == await visible(client, duress) == []
+    for w in (real, duress):
+        s = (await client.get("/v1/me/export", headers=w.wearer)).json()["sessions"][-1]
+        assert s["chain_ok"] is True and s["entries"] == [] and s["head_hash"] == ""
+
+
+async def test_delete_my_data_during_an_open_no_response_alert_keeps_the_location_link(client, db, ctx):
+    w = await make_world(client, db)
+    await to_state(client, db, ctx, w, "ESCALATED_L1")
+    c1 = w.contacts[0]
+    share = (await client.get(f"/v1/contact/{c1['token']}/status")).json()["alert"]["location"]["link"].rsplit("/l/", 1)[1]
+    assert (await client.delete("/v1/me/data", headers=w.wearer)).status_code == 200
+    assert (await client.get(f"/l/{share}")).status_code == 200
+    # Once the alert is over, nothing ties the location any more and a new erase removes it.
+    await client.post(f"/v1/contact/{c1['token']}/ack")
+    await client.post(f"/v1/contact/{c1['token']}/followup", json={"action": "safe"})
+    assert (await client.delete("/v1/me/data", headers=w.wearer)).status_code == 200
+    assert (await client.get(f"/l/{share}")).status_code == 404
+
+
+def test_chain_after_erase_is_checked_from_its_first_kept_row_and_still_catches_edits():
+    from datetime import datetime, timezone
+
+    from app import audit
+    rows, prev = [], audit.GENESIS
+    for i in range(4):
+        r = {"id": i, "chain_key": "session:x", "at": datetime(2026, 10, 17, 1, i, tzinfo=timezone.utc),
+             "actor": "wearer", "kind": f"k{i}", "from_state": None, "to_state": None, "detail": {}, "masked": False}
+        r["prev_hash"], r["hash"] = prev, audit.compute_hash(prev, audit.entry_payload(
+            **{k: r[k] for k in ("chain_key", "at", "actor", "kind", "from_state", "to_state", "detail", "masked")}))
+        prev = r["hash"]
+        rows.append(r)
+    kept = rows[2:]  # the first two were erased
+    assert audit.verify_rows(kept)["ok"] is False
+    assert audit.verify_rows(kept, after_erase=True)["ok"] is True
+    edited = [kept[0], {**kept[1], "detail": {"edited": True}}]
+    assert audit.verify_rows(edited, after_erase=True)["ok"] is False

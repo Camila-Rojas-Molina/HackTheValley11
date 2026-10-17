@@ -304,7 +304,10 @@ characters.
 ### `DELETE /v1/me/data`
 
 Deletes the wearer's timeline, location snapshots, raw heart rate and raw scrunchie telemetry (with its
-batch receipts), and leaves one tombstone entry.
+batch receipts), and leaves one tombstone entry. While an alert is open, the location already released to
+her contacts and the alert's hidden entries stay until it closes (erase again after that);
+`timeline_entries` counts the entries she could see. After an erase, `chain_ok` in the export checks each
+chain from its first remaining entry.
 
 ```json
 {"ok":true,"erased":{"timeline_entries":0,"hr_samples":60490,"telemetry_rows":607804}}

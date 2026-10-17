@@ -91,9 +91,13 @@ async def head(conn, chain_key: str) -> str:
     return _get(row, "hash", GENESIS)
 
 
-def verify_rows(rows: list[dict]) -> dict:
-    """Recompute a chain from its rows (ordered by id). Returns {ok, head, count, bad_id}."""
-    prev = GENESIS
+def verify_rows(rows: list[dict], after_erase: bool = False) -> dict:
+    """Recompute a chain from its rows (ordered by id). Returns {ok, head, count, bad_id}.
+
+    after_erase: the wearer used "Delete my data", which can leave a chain starting after
+    erased rows; it is then checked from its first remaining row on.
+    """
+    prev = rows[0]["prev_hash"] if (after_erase and rows) else GENESIS
     for r in rows:
         if r["prev_hash"] != prev:
             return {"ok": False, "head": prev, "count": len(rows), "bad_id": r["id"]}
@@ -130,9 +134,9 @@ def public_head(rows: list[dict]) -> str:
     return prev
 
 
-async def verify_chain(conn, chain_key: str) -> dict:
+async def verify_chain(conn, chain_key: str, after_erase: bool = False) -> dict:
     cur = await conn.execute(
         """SELECT id, chain_key, at, actor, kind, from_state, to_state, detail, masked, prev_hash, hash
              FROM audit_log WHERE chain_key = %s ORDER BY id""", (chain_key,))
     rows = await cur.fetchall()
-    return verify_rows([dict(r) for r in rows])
+    return verify_rows([dict(r) for r in rows], after_erase=after_erase)

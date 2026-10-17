@@ -196,16 +196,20 @@ async def export(request: Request):
         sessions = await (await conn.execute(
             "SELECT id, created_at, ended_at FROM sessions WHERE user_id = %s ORDER BY created_at",
             (user["id"],))).fetchall()
+        # After "Delete my data" a chain may start after erased rows (entries kept for an open alert).
+        erased = await (await conn.execute(
+            "SELECT 1 FROM audit_log WHERE chain_key = %s AND kind = 'timeline_erased' LIMIT 1",
+            (audit.user_chain(user["id"]),))).fetchone() is not None
         out = []
         for s in sessions:
-            chain = await audit.verify_chain(conn, audit.session_chain(s["id"]))
+            chain = await audit.verify_chain(conn, audit.session_chain(s["id"]), after_erase=erased)
             rows = await audit.visible_rows(conn, s["id"])
             # head_hash covers the listed entries (each with its masked flag), so anyone can recompute it.
             out.append({"session_id": str(s["id"]), "created_at": s["created_at"].isoformat(),
                         "ended_at": s["ended_at"].isoformat() if s["ended_at"] else None,
                         "chain_ok": chain["ok"], "head_hash": audit.public_head(rows),
                         "entries": [{**_entry(r), "masked": r["masked"]} for r in rows]})
-        user_chain = await audit.verify_chain(conn, audit.user_chain(user["id"]))
+        user_chain = await audit.verify_chain(conn, audit.user_chain(user["id"]), after_erase=erased)
         return {"user": user["display_name"], "sessions": out,
                 "account_chain_ok": user_chain["ok"], "account_head_hash": user_chain["head"],
                 "note": "Hash-chained: any edit after export breaks the chain when it is recomputed."}
@@ -219,8 +223,14 @@ async def erase(request: Request):
         async with conn.transaction():
             user = await require_wearer(request, conn)
             await conn.execute("SET LOCAL stillhere.erase = 'on'")
-            n_audit = (await conn.execute("DELETE FROM audit_log WHERE user_id = %s", (user["id"],))).rowcount
-            await conn.execute("DELETE FROM location_snapshots WHERE user_id = %s", (user["id"],))
+            # Everything she can see goes. While an alert is open, its hidden (duress) entries and
+            # the location released to her contacts stay until it closes; erase again after that.
+            n_audit = (await conn.execute(
+                f"DELETE FROM audit_log a WHERE a.user_id = %s AND {audit.VISIBLE_SQL}", (user["id"],))).rowcount
+            await conn.execute(
+                """DELETE FROM location_snapshots s WHERE s.user_id = %s AND NOT EXISTS (
+                     SELECT 1 FROM location_shares ls JOIN alerts al ON al.id = ls.alert_id
+                      WHERE ls.snapshot_id = s.id AND al.status IN ('OPEN', 'ACKED'))""", (user["id"],))
             n_hr = (await conn.execute("DELETE FROM hr_samples WHERE user_id = %s", (user["id"],))).rowcount
             n_tel = await timeseries.erase_user_raw(conn, user["id"])
             await conn.execute("SET LOCAL stillhere.erase = 'off'")
