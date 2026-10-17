@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>StillHere contact</title>
+<style>
+  :root { --bg: #f6f7f9; --fg: #111; --muted: #555; --card: #fff; --alert: #b00020; --btn: #1d4ed8; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --muted: #aaa; --card: #1c1c1c; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 17px/1.45 system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); }
+  main { max-width: 32rem; margin: 0 auto; padding: 24px 16px; }
+  .card { background: var(--card); border-radius: 14px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  h1 { font-size: 1.3rem; margin: 0 0 8px; }
+  p { margin: 8px 0; color: var(--muted); }
+  button { display: block; width: 100%; margin: 10px 0 0; padding: 14px; font-size: 1.05rem; border: 0;
+           border-radius: 10px; background: var(--btn); color: #fff; }
+  button.secondary { background: #6b7280; }
+  body.alarm { background: var(--alert); }
+  body.alarm .card { background: #fff; color: #111; }
+  .banner { background: #111; color: #fff; padding: 10px; border-radius: 8px; margin-top: 12px; font-weight: 600; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main><div class="card" id="view"><h1>StillHere</h1><p>Loading…</p></div></main>
+<script>
+(function () {
+  "use strict";
+  var token = decodeURIComponent(location.pathname.split("/").pop() || "");
+  var key = "sh_contact_" + token;
+  var contactToken = null;
+  try { contactToken = localStorage.getItem(key); } catch (e) {}
+  var view = document.getElementById("view");
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); }
+  function render(html, alarm) { document.body.classList.toggle("alarm", !!alarm); view.innerHTML = html; }
+
+  function consent() {
+    render("<h1>Become a trusted contact</h1>" +
+      "<p>You'll see nothing unless she misses check-ins or asks for help.</p>" +
+      "<p>She has to approve you before you're added.</p>" +
+      "<button id='join'>Ask to become a trusted contact</button>");
+    document.getElementById("join").onclick = function () {
+      fetch("/v1/contact/" + encodeURIComponent(token) + "/join", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: "{}"})
+        .then(function (r) { return r.json().then(function (b) { return [r.status, b]; }); })
+        .then(function (res) {
+          if (res[0] !== 200) { render("<h1>Link expired</h1><p>This invite has expired or was already used.</p>"); return; }
+          contactToken = res[1].contact_token;
+          try { localStorage.setItem(key, contactToken); } catch (e) {}
+          poll();
+        });
+    };
+  }
+
+  function act(path, body) {
+    fetch("/v1/contact/" + encodeURIComponent(contactToken) + path, {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})}).then(poll);
+  }
+
+  function show(s) {
+    if (!s.alert) {
+      render(s.approved
+        ? "<h1>You're a trusted contact</h1><p>You'll see nothing unless she misses check-ins or asks for help. Keep this page open.</p>"
+        : "<h1>Waiting for approval</h1><p>She needs to approve you before you become a trusted contact.</p>");
+      return;
+    }
+    var a = s.alert, html = "<h1>" + esc(a.title) + "</h1>";
+    if (a.handled_by && !a.you_acked) html += "<p>" + esc(a.handled_by) + " is handling it.</p>";
+    if (a.location) html += "<p>Last known location" + (a.location.simulated ? " (simulated)" : "") +
+      " (as of " + esc(a.location.as_of) + ", " + esc(a.location.age_min) + " min old): " +
+      "<a href='" + esc(a.location.link) + "' rel='noreferrer'>open</a></p>";
+    if (a.banner) html += "<div class='banner'>" + esc(a.banner) + "</div>";
+    a.actions.forEach(function (x) {
+      var label = {ack: "I'm on it", pass: "Can't help – pass it on", safe: "I'm with her – she's safe",
+                   cant_reach: "Can't reach her"}[x];
+      html += "<button data-x='" + x + "'" + (x === "pass" || x === "cant_reach" ? " class='secondary'" : "") + ">" +
+        esc(label) + "</button>";
+    });
+    render(html, a.kind !== "LOST_CONTACT");
+    Array.prototype.forEach.call(view.querySelectorAll("button[data-x]"), function (b) {
+      b.onclick = function () {
+        var x = b.getAttribute("data-x");
+        if (x === "ack") act("/ack"); else act("/followup", {action: x});
+      };
+    });
+  }
+
+  function poll() {
+    if (!contactToken) return;
+    fetch("/v1/contact/" + encodeURIComponent(contactToken) + "/status", {cache: "no-store"})
+      .then(function (r) { if (r.status !== 200) throw r.status; return r.json(); })
+      .then(show).catch(function () {});
+  }
+
+  function start() {
+    if (contactToken) { poll(); setInterval(poll, 1000); return; }
+    // A live-page link (from Telegram) is already a contact token.
+    fetch("/v1/contact/" + encodeURIComponent(token) + "/status", {cache: "no-store"}).then(function (r) {
+      if (r.status === 200) { contactToken = token; poll(); setInterval(poll, 1000); }
+      else { consent(); setInterval(poll, 1000); }
+    });
+  }
+  start();
+})();
+</script>
+</body>
+</html>

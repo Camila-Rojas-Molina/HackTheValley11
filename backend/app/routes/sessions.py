@@ -1,0 +1,256 @@
+"""Wearer endpoints (the /me page). Bearer wearer key.
+
+Real-PIN and duress-PIN replies are byte-identical (same JSON, same status);
+the wearer's own views (status, timeline) only show the public state, and
+duress entries stay hidden until the alert is resolved.
+"""
+from __future__ import annotations
+
+import uuid
+from typing import Literal, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from .. import audit, engine, messages, states
+from ..config import PRESETS
+from ..deps import canonical_json, get_ctx, get_db, require_wearer
+from ..security import classify_pin, new_token, sha256_hex
+
+router = APIRouter(tags=["wearer"])
+
+
+class ArmIn(BaseModel):
+    preset: Optional[Literal["night_out", "walking_home", "demo"]] = None
+    mode: Literal["wrist", "hair"] = "wrist"
+    profile: Optional[Literal["demo", "real"]] = None
+    interval_s: Optional[int] = Field(default=None, ge=10, le=24 * 3600)
+    duration_s: Optional[int] = Field(default=None, ge=30, le=24 * 3600)
+    window_multiplier: float = Field(default=1.0, ge=1.0, le=10.0)
+    device_id: Optional[str] = None
+
+
+class CheckinIn(BaseModel):
+    lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    lon: Optional[float] = Field(default=None, ge=-180, le=180)
+    accuracy_m: Optional[float] = Field(default=None, ge=0)
+
+
+class PinIn(BaseModel):
+    pin: str = Field(min_length=1, max_length=32)
+
+
+async def who_can_be_alerted(conn, user_id) -> list[dict]:
+    return [{"n": i + 1, "name": c["name"], "contact_id": c["id"]}
+            for i, c in enumerate(await engine.approved_contacts(conn, user_id))]
+
+
+async def arm_session(conn, ctx, user: dict, body: ArmIn, actor: str = "wearer") -> dict:
+    profile = body.profile or ctx.settings.default_profile
+    t = ctx.settings.timings(profile)
+    interval = body.interval_s or int(t.interval_s)
+    duration = body.duration_s
+    if duration is None and body.preset:
+        duration = PRESETS[body.preset]["duration_s"]
+    device_id = body.device_id
+    if device_id is None:
+        row = await (await conn.execute(
+            "SELECT id FROM devices WHERE user_id = %s ORDER BY created_at LIMIT 1", (user["id"],))).fetchone()
+        device_id = row["id"] if row else None
+    existing = await engine.active_session_id(conn, user["id"])
+    if existing is not None:
+        prev = await (await conn.execute(
+            """SELECT s.public_state, a.id AS alert_id FROM sessions s
+                 LEFT JOIN alerts a ON a.session_id = s.id AND a.masked AND a.status IN ('OPEN', 'ACKED')
+                WHERE s.id = %s FOR UPDATE OF s""", (existing,))).fetchone()
+        if prev["public_state"] == states.ENDED and prev["alert_id"] is not None:
+            # She "ended" with the duress PIN and is arming again: look like a fresh arm.
+            # The masked alert keeps escalating underneath.
+            await conn.execute("UPDATE sessions SET public_state = 'ARMED' WHERE id = %s", (existing,))
+            await audit.append(conn, chain_key=audit.session_chain(existing), actor=actor, kind="armed",
+                               user_id=user["id"], session_id=existing, alert_id=prev["alert_id"],
+                               to_state=states.ARMED, masked=False,
+                               detail={"profile": profile, "mode": body.mode, "preset": body.preset,
+                                       "interval_s": interval, "window_multiplier": body.window_multiplier})
+            return {"session_id": str(existing), "state_public": states.ARMED, "profile": profile,
+                    "interval_s": interval, "end_at": None,
+                    "who_can_be_alerted": await who_can_be_alerted(conn, user["id"])}
+        raise HTTPException(409, {"error": "already_armed", "session_id": str(existing)})
+    sess = await (await conn.execute(
+        """INSERT INTO sessions (user_id, device_id, profile, mode, preset, interval_s, window_multiplier, end_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s,
+                   CASE WHEN %s::int IS NULL THEN NULL ELSE now() + make_interval(secs => %s::int) END)
+           RETURNING *""",
+        (user["id"], device_id, profile, body.mode, body.preset, interval, body.window_multiplier,
+         duration, duration))).fetchone()
+    await conn.execute(
+        """INSERT INTO timers (session_id, kind, fire_at, expected_version)
+           VALUES (%s, 'CHECKIN_DUE', now() + make_interval(secs => %s), 0)""", (sess["id"], float(interval)))
+    if duration:
+        await conn.execute(
+            """INSERT INTO timers (session_id, kind, fire_at) VALUES (%s, 'SESSION_END_DUE', %s)""",
+            (sess["id"], sess["end_at"]))
+    await audit.append(conn, chain_key=audit.session_chain(sess["id"]), actor=actor, kind="armed",
+                       user_id=user["id"], session_id=sess["id"], to_state=states.ARMED,
+                       detail={"profile": profile, "mode": body.mode, "preset": body.preset,
+                               "interval_s": interval, "window_multiplier": body.window_multiplier})
+    return {"session_id": str(sess["id"]), "state_public": sess["public_state"], "profile": profile,
+            "interval_s": interval, "end_at": sess["end_at"].isoformat() if sess["end_at"] else None,
+            "who_can_be_alerted": await who_can_be_alerted(conn, user["id"])}
+
+
+@router.post("/v1/sessions")
+async def arm(request: Request, body: Optional[ArmIn] = None):
+    body = body or ArmIn()
+    db, ctx = get_db(request), get_ctx(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            return await arm_session(conn, ctx, user, body)
+
+
+async def _own_session(conn, user: dict, session_id: str) -> dict:
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(404, "no such session")
+    row = await (await conn.execute("SELECT * FROM sessions WHERE id = %s AND user_id = %s",
+                                    (session_id, user["id"]))).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such session")
+    return row
+
+
+@router.get("/v1/sessions/{session_id}")
+async def session_status(request: Request, session_id: str):
+    db = get_db(request)
+    async with db.connection() as conn:
+        user = await require_wearer(request, conn)
+        sess = await _own_session(conn, user, session_id)
+        view = engine.public_view(sess)
+        return {"session_id": str(sess["id"]), "state_public": view["state_public"], "cmd": view["cmd"],
+                "link_state": sess["link_state"], "profile": sess["profile"], "mode": sess["mode"],
+                "who_can_be_alerted": await who_can_be_alerted(conn, user["id"])}
+
+
+@router.post("/v1/sessions/{session_id}/checkin")
+async def checkin(request: Request, session_id: str, body: Optional[CheckinIn] = None):
+    """/me "I'm OK". Also refreshes the last-known location when the browser shares it."""
+    body = body or CheckinIn()
+    db, ctx = get_db(request), get_ctx(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            sess = await _own_session(conn, user, session_id)
+            if body.lat is not None and body.lon is not None:
+                await engine.record_location(conn, ctx, user_id=user["id"], session_id=sess["id"], lat=body.lat,
+                                             lon=body.lon, accuracy_m=body.accuracy_m, source="browser",
+                                             simulated=False)
+            applied = await engine.apply(conn, sess["id"], states.Event(states.WEARER_OK), actor="wearer",
+                                         event_key=f"web:{uuid.uuid4()}", ctx=ctx)
+    return canonical_json({"ok": True, "message": messages.NOTED, "state_public": applied.public_state})
+
+
+async def _pin_action(request: Request, session_id: str, body: PinIn, end: bool):
+    db, ctx = get_db(request), get_ctx(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            sess = await _own_session(conn, user, session_id)
+            kind = classify_pin(body.pin, user["pin_hash"], user["duress_pin_hash"])
+            if kind is None:
+                return canonical_json({"ok": False, "error": "wrong_pin"}, status_code=403)
+            if end:
+                ev = states.END_DURESS if kind == "duress" else states.END_REAL
+            else:
+                ev = states.PIN_DURESS if kind == "duress" else states.PIN_REAL
+            applied = await engine.apply(conn, sess["id"], states.Event(ev), actor="wearer",
+                                         event_key=f"web:{uuid.uuid4()}", ctx=ctx)
+    message = messages.ENDED if end else messages.CANCELLED
+    return canonical_json({"ok": True, "message": message, "state_public": applied.public_state})
+
+
+@router.post("/v1/sessions/{session_id}/cancel")
+async def cancel(request: Request, session_id: str, body: PinIn):
+    return await _pin_action(request, session_id, body, end=False)
+
+
+@router.post("/v1/sessions/{session_id}/end")
+async def end(request: Request, session_id: str, body: PinIn):
+    return await _pin_action(request, session_id, body, end=True)
+
+
+async def visible_timeline(conn, session_id) -> list[dict]:
+    cur = await conn.execute(
+        """SELECT a.id, a.at, a.actor, a.kind, a.from_state, a.to_state, a.detail
+             FROM audit_log a
+            WHERE a.session_id = %s
+              AND (NOT a.masked OR a.alert_id IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM alerts al WHERE al.id = a.alert_id AND al.status IN ('OPEN', 'ACKED')))
+            ORDER BY a.id""", (session_id,))
+    return [{"at": r["at"].isoformat(), "actor": r["actor"], "kind": r["kind"], "from_state": r["from_state"],
+             "to_state": r["to_state"], "detail": r["detail"]} for r in await cur.fetchall()]
+
+
+@router.get("/v1/sessions/{session_id}/timeline")
+async def timeline(request: Request, session_id: str):
+    db = get_db(request)
+    async with db.connection() as conn:
+        user = await require_wearer(request, conn)
+        sess = await _own_session(conn, user, session_id)
+        return {"session_id": str(sess["id"]), "entries": await visible_timeline(conn, sess["id"])}
+
+
+@router.get("/v1/me/export")
+async def export(request: Request):
+    """Personal timeline export with chain verification (server-side recompute)."""
+    db = get_db(request)
+    async with db.connection() as conn:
+        user = await require_wearer(request, conn)
+        sessions = await (await conn.execute(
+            "SELECT id, created_at, ended_at FROM sessions WHERE user_id = %s ORDER BY created_at",
+            (user["id"],))).fetchall()
+        out = []
+        for s in sessions:
+            chain = await audit.verify_chain(conn, audit.session_chain(s["id"]))
+            out.append({"session_id": str(s["id"]), "created_at": s["created_at"].isoformat(),
+                        "ended_at": s["ended_at"].isoformat() if s["ended_at"] else None,
+                        "chain_ok": chain["ok"], "head_hash": chain["head"],
+                        "entries": await visible_timeline(conn, s["id"])})
+        user_chain = await audit.verify_chain(conn, audit.user_chain(user["id"]))
+        return {"user": user["display_name"], "sessions": out,
+                "account_chain_ok": user_chain["ok"], "account_head_hash": user_chain["head"],
+                "note": "Hash-chained: any edit after export breaks the chain when it is recomputed."}
+
+
+@router.delete("/v1/me/data")
+async def erase(request: Request):
+    """Delete my data: timeline, locations and raw heart rate. Leaves a tombstone."""
+    db = get_db(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            await conn.execute("SET LOCAL stillhere.erase = 'on'")
+            n_audit = (await conn.execute("DELETE FROM audit_log WHERE user_id = %s", (user["id"],))).rowcount
+            await conn.execute("DELETE FROM location_snapshots WHERE user_id = %s", (user["id"],))
+            n_hr = (await conn.execute("DELETE FROM hr_samples WHERE user_id = %s", (user["id"],))).rowcount
+            await conn.execute("SET LOCAL stillhere.erase = 'off'")
+            await audit.append(conn, chain_key=audit.user_chain(user["id"]), actor="wearer", kind="timeline_erased",
+                               user_id=user["id"], detail={"audit_rows": n_audit, "hr_rows": n_hr})
+    return {"ok": True, "erased": {"timeline_entries": n_audit, "hr_samples": n_hr}}
+
+
+@router.post("/v1/me/telegram-link")
+async def telegram_link(request: Request):
+    """One-time /start link that binds the wearer's own chat for Reminder nudges."""
+    db, ctx = get_db(request), get_ctx(request)
+    token = new_token()
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            await conn.execute(
+                """UPDATE users SET tg_link_token_hash = %s, tg_link_expires_at = now() + interval '10 minutes'
+                    WHERE id = %s""", (sha256_hex(token), user["id"]))
+    bot = ctx.settings.telegram_bot_username
+    return {"t_me_link": f"https://t.me/{bot}?start={token}" if bot else None, "start_token": token,
+            "expires_in_s": 600}

@@ -1,0 +1,19 @@
+# Runtime
+fastapi==0.143.3
+uvicorn[standard]==0.54.0
+psycopg[binary,pool]==3.3.6
+psycopg-pool==3.3.3
+httpx==0.28.1
+pydantic==2.14.1
+qrcode==8.2
+pypng==0.20220715.0
+cryptography==50.0.2
+python-dotenv==1.2.4
+tzdata==2026.5
+
+# Tests
+pytest==9.1.1
+pytest-asyncio==1.4.0
+# Local Postgres for the integration tests (no system install). Optional:
+# set STILLHERE_TEST_PG_URI to use another server instead.
+pgserver==0.1.4
