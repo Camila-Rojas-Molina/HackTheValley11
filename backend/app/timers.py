@@ -106,6 +106,11 @@ async def timer_worker(db, ctx: Ctx, stop: asyncio.Event, tick_s: float = 1.0) -
     log.info("timer worker started")
     last_sensor = 0.0
     while not stop.is_set():
+        if not ctx.secret:
+            # APP_SECRET is loaded by the database init: until then no transition may run, since
+            # alerts sign location and live-page links with it.
+            await _sleep(stop, tick_s)
+            continue
         fired = 0
         try:
             fired = await run_due(db, ctx)

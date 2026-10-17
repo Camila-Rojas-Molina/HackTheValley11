@@ -183,6 +183,9 @@ async def telegram_poller(db, ctx: Ctx, stop: asyncio.Event, client: Optional[ht
     backoff = 1.0
     try:
         while not stop.is_set():
+            if not ctx.secret:  # contact links are signed with APP_SECRET: wait for the database init
+                await _wait(stop, 1)
+                continue
             lock_conn = None
             try:
                 lock_conn = await psycopg.AsyncConnection.connect(db.conninfo, autocommit=True)

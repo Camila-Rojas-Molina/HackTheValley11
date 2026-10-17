@@ -423,3 +423,40 @@ async def test_live_page_tap_racing_the_ack_timeout_is_not_lost(client, db, ctx,
     await asyncio.wait_for(t, 15)
     assert r.status_code == 200 and r.json() == {"ok": True, "result": "acked"}
     assert (await session_row(db, w.session_id))["state"] == states.ACKED
+
+
+async def test_workers_wait_for_the_app_secret(client, db, ctx, settings):
+    """Before the database init loads APP_SECRET, nothing may sign links with an empty key."""
+    from app import timers
+    w = await make_world(client, db, contacts=1)
+    await to_state(client, db, ctx, w, states.REMINDED)
+    async with db.connection() as conn:
+        await conn.execute("UPDATE timers SET fire_at = now() WHERE session_id = %s AND kind = 'REMINDER_TIMEOUT'",
+                           (w.session_id,))
+    early = Ctx(settings=replace(settings, telegram_bot_token="123:TEST"), secret="")
+    calls = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path.rsplit("/", 1)[1])
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json={"ok": True, "result": []})
+    stop = asyncio.Event()
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tasks = [asyncio.create_task(timers.timer_worker(db, early, stop, tick_s=0.1)),
+             asyncio.create_task(telegram.telegram_poller(db, early, stop, client=http))]
+    await asyncio.sleep(0.6)
+    assert (await session_row(db, w.session_id))["state"] == states.REMINDED  # nothing escalated yet
+    assert calls == []
+    early.secret = ctx.secret  # the init succeeded
+    for _ in range(40):
+        if (await session_row(db, w.session_id))["state"] == "ESCALATED_L1" and "getUpdates" in calls:
+            break
+        await asyncio.sleep(0.1)
+    stop.set()
+    await asyncio.wait_for(asyncio.gather(*tasks), 10)
+    await http.aclose()
+    assert (await session_row(db, w.session_id))["state"] == "ESCALATED_L1"
+    assert "getUpdates" in calls
+    # The location link in the alert is the one the server answers with the real secret.
+    link = [o for o in await outbox(db, w.session_id, contact_id=w.contacts[0]["id"])][0]["text"].split(": ")[-1]
+    assert (await client.get("/l/" + link.rsplit("/l/", 1)[1])).status_code == 200
