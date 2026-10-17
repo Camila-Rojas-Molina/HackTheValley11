@@ -19,7 +19,7 @@ import re
 import httpx
 import pytest
 import pytest_asyncio
-from hypothesis import HealthCheck, event, given, settings
+from hypothesis import HealthCheck, event, example, given, settings
 from hypothesis import strategies as st
 
 from app import sensors, states
@@ -229,14 +229,20 @@ async def _wearer_side(client, db, w) -> dict:
     timeline = (await client.get(f"/v1/sessions/{w.session_id}/timeline", headers=w.wearer)).json()["entries"]
     texts = [r["text"] for r in await _q(db, """SELECT text FROM outbox WHERE session_id = %s AND recipient = 'wearer'
                                                  ORDER BY id""", w.session_id)]
+    # Each world has its own contacts, so compare a contact by its position in the world, not its serial id.
+    pos = {str(c["id"]): f"<contact {i}>" for i, c in enumerate(w.contacts)}
+    detail = lambda d: {k: pos.get(str(v), v) if k == "contact_id" else v for k, v in d.items()}
     return {"status": _norm(status.text), "heartbeat": _norm(hb.text),
-            "timeline": [(e["kind"], e["from_state"], e["to_state"], _norm(str(sorted(e["detail"].items()))))
+            "timeline": [(e["kind"], e["from_state"], e["to_state"], _norm(str(sorted(detail(e["detail"]).items()))))
                          for e in timeline],
             "wearer_texts": [_norm(t) for t in texts]}
 
 
 @PROP
 @given(ops=prefix_ops, action=st.sampled_from(("cancel", "end")), after=st.sampled_from(("none", "squeeze", "checkin")))
+# Found by CI: an escalation before the PIN names each world's own first contact (different serial ids).
+@example(ops=[("fire", states.CHECKIN_DUE), ("fire", states.PROMPT_TIMEOUT), ("fire", states.REMINDER_TIMEOUT)],
+         action="cancel", after="none")
 async def test_real_and_duress_pin_are_byte_identical_after_any_prefix(pclient, papp, ops, action, after):
     db, ctx = papp.state.db, papp.state.ctx
     await _end_all(db)
