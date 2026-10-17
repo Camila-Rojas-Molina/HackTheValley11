@@ -123,8 +123,13 @@ async def test_stored_cards_match_the_pure_engine(client):
     pure = care.score_cohort(care.generate_cohort(care.DEFAULT_SEED, END), END)
     expected = {c["resident_id"]: json.loads(json.dumps(c)) for c in pure}
     served = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts?include_low=true")).json()["alerts"]}
-    # Without a Vultr key every card keeps the rule template, so served == stored == pure.
+    # Without a Vultr key every card keeps the rule template, so served == stored == pure, apart
+    # from the delivery decision, which needs the push history and is made when it is stored.
     assert {c.pop("briefing_source") for c in served.values()} == {"template"}
+    for c in served.values():
+        assert c.pop("delivery")["channel"] in ("push", "digest", None)
+    for c in expected.values():
+        assert c.pop("delivery") is None
     assert served == expected
 
 
@@ -237,3 +242,44 @@ async def test_feedback_touches_no_kaze_table(client, db):
     before = await kaze_counts(db)
     await client.post("/v1/care/alerts/R-08/feedback", json={"action": "snooze_3d"})
     assert await kaze_counts(db) == before
+
+
+# --- research 1.6: alert budget and the shift-start digest ----------------------------------------
+async def test_fresh_seed_pushes_every_flagged_card_once(client, db):
+    await seed(client)
+    cards = (await client.get("/v1/care/alerts")).json()["alerts"]
+    assert cards and all(c["delivery"]["channel"] == "push" for c in cards if c["level"] in care.FLAGGED)
+    async with db.connection() as conn:
+        n = (await (await conn.execute("SELECT count(*) AS n FROM care_pushes")).fetchone())["n"]
+        assert n == len([c for c in cards if c["level"] in care.FLAGGED])
+        await care.evaluate(conn, END)                                  # re-scoring the same day
+        assert (await (await conn.execute("SELECT count(*) AS n FROM care_pushes")).fetchone())["n"] == n
+
+
+async def test_a_second_push_in_24_hours_goes_to_the_digest(client, db):
+    await seed(client)
+    async with db.connection() as conn:
+        await conn.execute("DELETE FROM care_pushes WHERE resident_id = 'R-08'")
+        await conn.execute(
+            """INSERT INTO care_pushes (resident_id, as_of, pushed_at, level, score, signature)
+               VALUES ('R-08', %s, now() - interval '2 hours', 'worth a look this shift', 30, 'other')""",
+            (END - timedelta(days=1),))
+        await care.evaluate(conn, END)
+    cards = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts")).json()["alerts"]}
+    assert cards["R-08"]["delivery"]["channel"] == "digest"
+    digest = (await client.get("/v1/care/digest")).json()
+    assert digest["synthetic"] is True and digest["as_of"] == END.isoformat()
+    item = next(i for i in digest["items"] if i["resident_id"] == "R-08")
+    assert "1 push per resident per 24 h" in item["reason"] and item["level"] == cards["R-08"]["level"]
+    assert all(i["resident_id"] != "R-10" for i in digest["items"])   # pushed cards are not repeated
+
+
+async def test_snooze_button_moves_the_next_card_to_the_digest(client, db):
+    await seed(client)
+    assert (await client.post("/v1/care/alerts/R-10/feedback", json={"action": "snooze_3d"})).status_code == 200
+    async with db.connection() as conn:
+        await conn.execute("DELETE FROM care_pushes WHERE resident_id = 'R-10'")
+        await care.evaluate(conn, END)
+    cards = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts")).json()["alerts"]}
+    assert cards["R-10"]["delivery"]["channel"] == "digest"
+    assert cards["R-10"]["delivery"]["reason"].startswith("snoozed until ")

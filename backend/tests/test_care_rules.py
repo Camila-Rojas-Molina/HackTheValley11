@@ -634,3 +634,70 @@ def test_flagged_cards_offer_the_four_feedback_buttons():
         else:
             assert card["actions"] == [] and card["feedback_url"] is None
     assert care.SNOOZE_DAYS == 3
+
+
+# --- research 1.6: at most 1 push per resident per 24 h; identical alert muted 3 days unless worse -----
+from datetime import datetime, timezone  # noqa: E402
+
+NOW = datetime(2026, 10, 17, 7, 0, tzinfo=timezone.utc)
+
+
+def look_card(**kw):
+    card = care.score_resident("X", "X", flat_days(night_restless_min=200.0), END)
+    card.update(kw)
+    return card
+
+
+def push(as_of, hours_ago, card):
+    return care.Push(as_of=as_of, at=NOW - timedelta(hours=hours_ago), signature=care.signature(card),
+                     level=card["level"], score=card["score"])
+
+
+def test_a_first_flagged_card_is_pushed():
+    d = care.delivery_for(look_card(), [], None, NOW)
+    assert d["channel"] == "push" and d["reason"] == "first alert for this resident in 24 h"
+
+
+def test_low_cards_are_not_delivered_and_no_data_goes_to_the_digest():
+    low = care.score_resident("X", "X", flat_days(), END)
+    assert care.delivery_for(low, [], None, NOW)["channel"] is None
+    nodata = care.score_resident("X", "X", [d for d in flat_days() if d.day != END], END)
+    assert care.delivery_for(nodata, [], None, NOW)["channel"] == "digest"
+
+
+def test_at_most_one_push_per_resident_per_24_hours():
+    card = look_card()
+    other = look_card(level=care.LEVEL_REVIEW, fired_last_3_days={care.NIGHT: [], care.STAND_HR: []})
+    d = care.delivery_for(card, [push(END - timedelta(days=1), 5, other)], None, NOW)
+    assert d["channel"] == "digest" and "1 push per resident per 24 h" in d["reason"]
+    d = care.delivery_for(card, [push(END - timedelta(days=1), 25, other)], None, NOW)
+    assert d["channel"] == "push"
+
+
+def test_re_scoring_the_same_day_keeps_its_push():
+    card = look_card()
+    d = care.delivery_for(card, [push(END, 1, card)], None, NOW)
+    assert d["channel"] == "push" and d["reason"] == "already pushed for this day"
+
+
+def test_an_identical_alert_is_muted_for_3_days_unless_it_gets_worse():
+    card = look_card()
+    muted = care.delivery_for(card, [push(END - timedelta(days=2), 30, card)], None, NOW)
+    assert muted["channel"] == "digest" and "muted 3 days unless it gets worse" in muted["reason"]
+    old = care.delivery_for(card, [push(END - timedelta(days=3), 30, card)], None, NOW)
+    assert old["channel"] == "push"
+    lower = dict(card, score=card["score"] - 20)
+    worse = care.delivery_for(card, [push(END - timedelta(days=2), 30, lower)], None, NOW)
+    assert worse["channel"] == "push" and worse["reason"] == "worse than the alert pushed on " + \
+        (END - timedelta(days=2)).isoformat()
+
+
+def test_a_snoozed_resident_goes_to_the_digest():
+    d = care.delivery_for(look_card(), [], NOW + timedelta(hours=10), NOW)
+    assert d["channel"] == "digest" and d["reason"].startswith("snoozed until ")
+    assert care.delivery_for(look_card(), [], NOW - timedelta(minutes=1), NOW)["channel"] == "push"
+
+
+def test_budget_constants_and_sources():
+    assert care.PUSH_BUDGET_HOURS == 24 and care.MUTE_DAYS == 3
+    assert "Ancker 2017" in care.SOURCES["budget"] and "Joint Commission" in care.SOURCES["budget"]

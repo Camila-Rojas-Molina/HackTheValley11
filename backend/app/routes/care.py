@@ -12,6 +12,9 @@ POST /v1/care/alerts/{resident_id}/feedback   {action: useful | not_useful | alr
                           snooze_3d, reason?}: a button on a flagged card, stored against the
                           resident's latest card (research 1.7). snooze_3d mutes pushes for 3 days.
 GET  /v1/care/feedback    counts per button.
+GET  /v1/care/digest      the shift-start digest: the latest flagged cards that were not pushed (at
+                          most 1 push per resident per 24 h; an identical alert is muted 3 days unless
+                          it gets worse; snoozed residents), each with the reason (research 1.6).
 POST /v1/demo/care-seed   X-Admin-Key. Body optional: {seed, end_day}. Replaces the synthetic cohort
                           (20 residents x 28 days, ending end_day, default yesterday UTC) and scores it.
 
@@ -104,6 +107,12 @@ async def care_feedback(request: Request, resident_id: str, body: FeedbackIn):
 async def care_feedback_summary(request: Request):
     async with request.app.state.db.connection() as conn:
         return await care.feedback_summary(conn)
+
+
+@router.get("/v1/care/digest")
+async def care_digest(request: Request):
+    async with request.app.state.db.connection() as conn:
+        return await care.list_digest(conn)
 
 
 @router.post("/v1/demo/care-seed")

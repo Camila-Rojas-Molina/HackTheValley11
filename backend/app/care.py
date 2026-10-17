@@ -144,6 +144,13 @@ SCORE_LABEL = "change score (0-100)"
 SCORE_NOTE = ("How far today's patterns moved from this resident's own usual: the sum of the rule points. "
               "It ranks change only; the level comes from which rules fired, not from this number.")
 
+# Alert budget (research 1.6): at most 1 push per resident per 24 h; an identical alert (same level
+# and rules) is muted for 3 days unless it gets worse (higher level or score); everything else goes
+# into the shift-start digest. A snoozed resident (feedback button) goes to the digest too.
+PUSH_BUDGET_HOURS = 24
+MUTE_DAYS = 3
+LEVEL_RANK = {LEVEL_LOW: 0, LEVEL_NO_DATA: 0, LEVEL_LOOK: 1, LEVEL_REVIEW: 2}
+
 # Feedback buttons on every flagged card (research 1.7; Henry 2022 TREWS: confirm, dismiss or pause;
 # TigerPlace staff rated each alert). "Snooze" mutes pushes for this resident for 3 days.
 SNOOZE_DAYS = 3
@@ -201,6 +208,8 @@ def _sd(values: Sequence[float], mean: float) -> float:
 
 
 SOURCES = {
+    "budget": ("Ancker 2017 (PMC5387195: acceptance dropped about 30% with each repeat reminder); Joint Commission "
+               "SEA 50 (2013, recommendation 4); Rantz 2017 (PMC5679074: a morning summary of the prior 24 h)"),
     "medication": ("Shimbo 2016 (15 days after starting an antihypertensive); Dave 2024 (JAMA Intern Med, "
                    "nursing-home residents, 30 days after starting an antihypertensive); AGS Beers 2023"),
     STAND_HR: ("CDC STEADI 2017 (BP and pulse at 1 and 3 min standing); Norcliffe-Kaufmann 2018 "
@@ -461,6 +470,53 @@ def _hr_availability(present: Sequence[DayMetrics], of_days: int) -> dict:
             "label": f"available on {n} of {of_days} days" if n else "not available"}
 
 
+@dataclass(frozen=True)
+class Push:
+    """A card that was pushed to the care team (care_pushes)."""
+    as_of: date
+    at: datetime
+    signature: str
+    level: str
+    score: int
+
+
+def signature(card: dict) -> str:
+    """What makes two alerts "identical": the same level and the same rules in the 3-day span."""
+    return f"{card['level']}|{','.join(sorted(card.get('fired_last_3_days') or {}))}"
+
+
+def _utc(t: datetime) -> str:
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def delivery_for(card: dict, pushes: Sequence[Push], snoozed_until: Optional[datetime], now: datetime) -> dict:
+    """push, digest or nothing for one card, given the resident's push history (research 1.6)."""
+    level = card["level"]
+    if level not in FLAGGED:
+        if level == LEVEL_NO_DATA:
+            return {"channel": "digest", "reason": "device data is missing; listed in the shift-start digest"}
+        return {"channel": None, "reason": "not flagged"}
+    as_of = date.fromisoformat(card["as_of"])
+    if any(p.as_of == as_of for p in pushes):
+        return {"channel": "push", "reason": "already pushed for this day"}
+    if snoozed_until is not None and snoozed_until > now:
+        return {"channel": "digest", "reason": f"snoozed until {_utc(snoozed_until)}"}
+    recent = [p for p in pushes if p.at > now - timedelta(hours=PUSH_BUDGET_HOURS)]
+    if recent:
+        last = max(recent, key=lambda p: p.at)
+        return {"channel": "digest",
+                "reason": f"1 push per resident per 24 h; the last one was at {_utc(last.at)}"}
+    sig = signature(card)
+    same = [p for p in pushes if p.signature == sig and 0 < (as_of - p.as_of).days < MUTE_DAYS]
+    if same:
+        last = max(same, key=lambda p: p.as_of)
+        if LEVEL_RANK[level] > LEVEL_RANK.get(last.level, 0) or card["score"] > last.score:
+            return {"channel": "push", "reason": f"worse than the alert pushed on {last.as_of.isoformat()}"}
+        return {"channel": "digest",
+                "reason": f"same alert pushed on {last.as_of.isoformat()}; muted 3 days unless it gets worse"}
+    return {"channel": "push", "reason": "first alert for this resident in 24 h"}
+
+
 def _rules_on(by_day: dict, as_of: date, record: dict) -> list[dict]:
     """Every scored rule for one day, against that day's own recent and baseline windows."""
     recent_days, baseline_days = windows(as_of)
@@ -530,6 +586,7 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "record_context": context,
         "actions": [dict(a) for a in FEEDBACK_ACTIONS] if level in FLAGGED else [],
         "feedback_url": f"/v1/care/alerts/{resident_id}/feedback" if level in FLAGGED else None,
+        "delivery": None,                 # push / digest: decided when stored, from the push history
         "priority_raised_by": raised_by,
         "pattern_note": PATTERN_NOTE,
         "limits": ["Heart rate alone cannot show blood pressure.",
@@ -728,12 +785,27 @@ async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
                             record={"hr_rule_off": r["hr_rule_off"], "med_changes": r["med_changes"]})
              for r in residents]
     async with conn.transaction():
+        now = (await (await conn.execute("SELECT now() AS now")).fetchone())["now"]
+        history: dict[str, list[Push]] = {}
+        for p in await (await conn.execute(
+                "SELECT resident_id, as_of, pushed_at, level, score, signature FROM care_pushes")).fetchall():
+            history.setdefault(p["resident_id"], []).append(
+                Push(as_of=p["as_of"], at=p["pushed_at"], signature=p["signature"], level=p["level"], score=p["score"]))
+        snoozed = {r["resident_id"]: r["until"] for r in await (await conn.execute(
+            "SELECT resident_id, max(snooze_until) AS until FROM care_feedback GROUP BY resident_id")).fetchall()}
         for card in cards:
+            rid = card["resident_id"]
+            card["delivery"] = delivery_for(card, history.get(rid, []), snoozed.get(rid), now)
             await conn.execute(
                 """INSERT INTO care_alerts (resident_id, as_of, score, level, card) VALUES (%s, %s, %s, %s, %s)
                    ON CONFLICT (resident_id, as_of) DO UPDATE
                    SET score = EXCLUDED.score, level = EXCLUDED.level, card = EXCLUDED.card, created_at = now()""",
-                (card["resident_id"], as_of, card["score"], card["level"], Jsonb(card)))
+                (rid, as_of, card["score"], card["level"], Jsonb(card)))
+            if card["delivery"]["channel"] == "push":
+                await conn.execute(
+                    """INSERT INTO care_pushes (resident_id, as_of, level, score, signature)
+                       VALUES (%s, %s, %s, %s, %s) ON CONFLICT (resident_id, as_of) DO NOTHING""",
+                    (rid, as_of, card["level"], card["score"], signature(card)))
     return cards
 
 
@@ -853,3 +925,20 @@ async def feedback_summary(conn) -> dict:
     counts = {a: 0 for a in FEEDBACK_IDS}
     counts.update({r["action"]: r["n"] for r in rows})
     return {"synthetic": True, "notice": NOTICE, "counts": counts}
+
+
+async def list_digest(conn) -> dict:
+    """The shift-start digest: flagged (and data-missing) cards of the latest day that were not pushed."""
+    rows = await (await conn.execute(
+        """SELECT card FROM care_alerts
+            WHERE as_of = (SELECT max(as_of) FROM care_alerts) AND card -> 'delivery' ->> 'channel' = 'digest'
+            ORDER BY CASE level WHEN 'review this shift' THEN 0 WHEN 'worth a look this shift' THEN 1 ELSE 2 END,
+                     score DESC, resident_id""")).fetchall()
+    latest = await (await conn.execute("SELECT max(as_of) AS d FROM care_alerts")).fetchone()
+    items = [{"resident_id": c["resident_id"], "display_name": c["display_name"], "level": c["level"],
+              "score": c["score"], "reason": c["delivery"]["reason"], "suggested_check": c["suggested_check"],
+              "briefing": c["briefing"]} for c in (r["card"] for r in rows)]
+    return {"synthetic": True, "notice": NOTICE, "as_of": latest["d"].isoformat() if latest["d"] else None,
+            "budget": {"push_per_resident_hours": PUSH_BUDGET_HOURS, "identical_muted_days": MUTE_DAYS,
+                       "source": SOURCES["budget"], "status": ASSUMPTION},
+            "items": items}

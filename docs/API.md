@@ -714,6 +714,20 @@ How often each button was pressed, for tuning the rules on synthetic data.
 {"synthetic":true,"notice":"Hackathon prototype. …","counts":{"useful":2,"not_useful":1,"already_known":0,"snooze_3d":1}}
 ```
 
+### `GET /v1/care/digest`
+
+The shift-start digest: the latest flagged cards that were not pushed, each with the reason. A card is
+pushed at most once per resident per 24 h; an identical alert (same level and rules) is muted for 3 days
+unless its level or score goes up; a resident snoozed with the feedback button goes here too. Every card
+on `/v1/care/alerts` carries `delivery: {channel: "push" | "digest" | null, reason}`.
+
+```json
+{"synthetic":true,"as_of":"2026-10-16","budget":{"push_per_resident_hours":24,"identical_muted_days":3,
+ "source":"Ancker 2017 (…); Joint Commission SEA 50 (2013, recommendation 4); Rantz 2017 (…)","status":"untested assumption"},
+ "items":[{"resident_id":"R-08","display_name":"Synthetic resident R-08","level":"review this shift","score":100,
+  "reason":"1 push per resident per 24 h; the last one was at 2026-10-17 08:51 UTC","suggested_check":"…","briefing":"…"}]}
+```
+
 ## 10. Health
 
 ### `GET /v1/health`
