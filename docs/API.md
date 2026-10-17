@@ -66,7 +66,7 @@ the HTTP calls in section 3.
 device -> bridge
   H,<boot_id>,<seq>,<enmo60_mg>,<tilt_deg>,<fsr_base_mv>,<offbody>     every 1 s
   E,<boot_id>:<seq>,<type>,<json_payload>                              immediately
-  R,<ms>,<ax_mg>,<ay_mg>,<az_mg>,<fsr_a_mv>,<fsr_b_mv>                 50 Hz RECORD mode; counted, not forwarded
+  R,<ms>,<ax_mg>,<ay_mg>,<az_mg>,<fsr_a_mv>,<fsr_b_mv>                 50 Hz RECORD mode; debug telemetry
 bridge -> device
   C,<led>,<blink_n>,<challenge_id>                                     after every heartbeat or event reply
 ```
@@ -107,6 +107,13 @@ Bridge behaviour:
   arrived (none when no prompt was showing). A buffered squeeze answers a prompt only if it carries that
   prompt's `challenge_id`: one made before the prompt was issued answers nothing (`result: "ignored"`, a
   `stale_squeeze` timeline entry, no retry used). A live squeeze answers as before.
+- **RECORD mode (`R` lines):** forwarded to `POST /v1/telemetry/batch` (section 8) only while the heartbeat
+  reply says `"telemetry": "debug"`, which the demo profile does; the real profile sends heartbeats and events
+  only, so the bridge just counts them. About once a second (or every 500 rows) as `clock: "device_ms"`,
+  `profile: "night_out"` (raw kept 48 h), `simulated: false`, `batch_id: "<boot_id>:<first ms>:<rows>"`. A batch
+  that fails is retried as-is (same `batch_id`, stored once); during an outage at most 2 minutes of rows wait,
+  oldest dropped first. Events never wait behind telemetry. `--telemetry on|off` overrides the server.
+  The `FSR` columns are optional (`R,<ms>,<ax_mg>,<ay_mg>,<az_mg>` is accepted).
 - **Replug:** the serial port is reopened automatically.
 - `--stdin` reads the same lines from stdin, with no hardware and no pyserial.
 
@@ -123,14 +130,18 @@ Extends the device lease (10 s demo, 60 s real) and returns the command for the 
 ```
 
 All fields are optional. `wear_mode` is `wrist` or `hair`; `enmo60_mg` is 0–20000; `feats` is an optional
-list (debug telemetry). Replies:
+list that is accepted and not stored (no feature format is defined; the stored debug telemetry is the raw
+`R` lines, see section 2). Replies:
 
 ```json
-{"cmd":{"blink_n":0,"challenge_id":null,"led":"off"},"server_time":"2026-10-17T07:33:53.077279+00:00","state_public":"ARMED"}
-{"cmd":{"blink_n":0,"challenge_id":"7c6f9d","led":"amber"},"server_time":"2026-10-17T07:33:53.083048+00:00","state_public":"PROMPTED"}
-{"cmd":{"blink_n":1,"challenge_id":"8a3f08","led":"amber"},"server_time":"2026-10-17T07:33:53.090821+00:00","state_public":"PROMPTED"}
+{"cmd":{"blink_n":0,"challenge_id":null,"led":"off"},"server_time":"2026-10-17T07:33:53.077279+00:00","state_public":"ARMED","telemetry":"debug"}
+{"cmd":{"blink_n":0,"challenge_id":"7c6f9d","led":"amber"},"server_time":"2026-10-17T07:33:53.083048+00:00","state_public":"PROMPTED","telemetry":"debug"}
+{"cmd":{"blink_n":1,"challenge_id":"8a3f08","led":"amber"},"server_time":"2026-10-17T07:33:53.090821+00:00","state_public":"PROMPTED","telemetry":"off"}
 ```
 
+`telemetry` is `"debug"` while the session runs the demo profile (the bridge then forwards `R` lines) and
+`"off"` in the real profile, with no session, and after a session ended; `POST /v1/demo/profile` switches it.
+It follows the public state, so it never tells a duress end from a real one.
 With no session running, `state_public` is `DISARMED` (never armed) or `ENDED`, and the LED is off. The first
 heartbeat after a `LOST_CONTACT` restores the link and tells the contacts who were told about the loss.
 
@@ -381,12 +392,12 @@ her contacts and the alert's hidden entries stay until it closes (erase again af
 chain from its first remaining entry.
 
 ```json
-{"ok":true,"erased":{"timeline_entries":0,"hr_samples":60490,"telemetry_rows":607804}}
+{"ok":true,"erased":{"timeline_entries":0,"hr_samples":60490,"telemetry_rows":607804,"rollup_rows":2112}}
 ```
 
-The rollups in section 8 are not erased on TimescaleDB: their 1-minute rows age out after 8 days and their
-hourly rows after 90 days; daily rows are kept. On plain PostgreSQL the rollups are views over the raw rows,
-so they go with them.
+`rollup_rows`: on TimescaleDB her rows in every rollup of section 8 (the continuous aggregates keep
+materialized rows after the raw rows are gone) are deleted in the same transaction. On plain PostgreSQL the
+rollups are views over the raw rows, so they go with them and `rollup_rows` is 0.
 
 ### `POST /v1/me/telegram-link`
 
@@ -722,11 +733,12 @@ and compression stats (the last four on TimescaleDB only). Shortened:
 ```json
 {"mode":"timescaledb","zscore_method":"plain_avg_stddev","note":null,"server_version":"16.15",
  "timescaledb":"2.30.2","timescaledb_toolkit":null,
- "retention":{"night_out_raw_hours":48.0,"care_raw_days":30,"rollup_1m_days":8,"rollup_1h_days":90},
+ "retention":{"night_out_raw_hours":48.0,"care_raw_days":30,"rollup_1m_days":8,"rollup_1h_days":90,
+              "night_out_rollups_days":8},
  "hypertables":[{"hypertable_name":"hr_samples","num_chunks":8,"compression_enabled":true}, "…"],
  "continuous_aggregates":[{"view_name":"hr_1m","materialized_only":false,"reads_from":"hr_samples"}, "…"],
  "jobs":[{"job_id":1014,"proc_name":"stillhere_retention_job","schedule_interval":"01:00:00",
-          "config":{"night_out_after":"48 hours"},"last_run_status":"Success", "…"}, "…"],
+          "config":{"night_out_after":"48 hours","night_out_rollups_after":"8 days"},"last_run_status":"Success", "…"}, "…"],
  "columnstore":[{"hypertable":"hr_samples","total_chunks":8,"number_compressed_chunks":0, "…"}, "…"]}
 ```
 

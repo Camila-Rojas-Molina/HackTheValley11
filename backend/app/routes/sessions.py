@@ -277,7 +277,8 @@ async def my_alerts(request: Request):
 
 @router.delete("/v1/me/data")
 async def erase(request: Request):
-    """Delete my data: timeline, locations, raw heart rate and raw scrunchie telemetry. Leaves a tombstone."""
+    """Delete my data: timeline, locations, raw heart rate and raw scrunchie telemetry, and their rollups
+    (TimescaleDB keeps materialized rollup rows otherwise). Leaves a tombstone."""
     db = get_db(request)
     async with db.connection() as conn:
         async with conn.transaction():
@@ -293,11 +294,13 @@ async def erase(request: Request):
                       WHERE ls.snapshot_id = s.id AND al.status IN ('OPEN', 'ACKED'))""", (user["id"],))
             n_hr = (await conn.execute("DELETE FROM hr_samples WHERE user_id = %s", (user["id"],))).rowcount
             n_tel = await timeseries.erase_user_raw(conn, user["id"])
+            n_roll = await timeseries.erase_user_rollups(conn, user["id"])
             await conn.execute("SET LOCAL stillhere.erase = 'off'")
             await audit.append(conn, chain_key=audit.user_chain(user["id"]), actor="wearer", kind="timeline_erased",
                                user_id=user["id"], detail={"audit_rows": n_audit, "hr_rows": n_hr,
-                                                           "telemetry_rows": n_tel})
-    return {"ok": True, "erased": {"timeline_entries": n_audit, "hr_samples": n_hr, "telemetry_rows": n_tel}}
+                                                           "telemetry_rows": n_tel, "rollup_rows": n_roll})
+    return {"ok": True, "erased": {"timeline_entries": n_audit, "hr_samples": n_hr, "telemetry_rows": n_tel,
+                                   "rollup_rows": n_roll}}
 
 
 @router.post("/v1/me/telegram-link")

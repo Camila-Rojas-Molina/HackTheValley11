@@ -333,7 +333,8 @@ Notes:
 | Response windows adjustable up to 10× | **Demonstrated** (`window_multiplier`) | Usability with real users |
 | Hosting on a Vultr Compute VM (compose + Caddy HTTPS) | **Configured**; the same compose stack was smoke-tested locally | Not yet deployed from this repo |
 | Vultr Serverless Inference wording of PCC briefings | **Configured** and wired into `GET /v1/care/alerts`; tested against a mocked endpoint, and the template fallback is covered by tests | A live call needs a key. Before display the text is checked against the banned terms and the senior-mode wording rules, and every number in it must be on the card |
-| Tiger Data: hypertables, 1 min → 1 h → 1 d real-time rollups, z-score view, compression, per-profile retention | **Demonstrated** on local TimescaleDB 2.30.2 (PostgreSQL 16, and 18 with Toolkit) and on plain PostgreSQL | Not yet run on Tiger Cloud. The z-score is display only |
+| Tiger Data: hypertables, 1 min → 1 h → 1 d real-time rollups, z-score view, compression, per-profile retention | **Demonstrated** on local TimescaleDB 2.30.2 (PostgreSQL 17.11 built from source, no Toolkit; earlier PostgreSQL 16, and 18 with Toolkit, in Docker) and on plain PostgreSQL | Not yet run on Tiger Cloud. The z-score is display only |
+| Debug telemetry: RECORD-mode `R` lines → `scrunchie_telemetry` | **Configured**: `bridge.py` forwards them while the heartbeat reply says `"telemetry": "debug"` (demo profile); the real profile sends heartbeats and events only | Not yet run with the scrunchie's firmware; `feats` in heartbeats is accepted and not stored |
 | PointClickCare senior mode: rules, cards, suggested checks | **Simulated**: 20 synthetic residents, all labelled | Thresholds are untested assumptions tuned on synthetic data; never checked against real recordings |
 | Full-night battery (watch, iPhone relay, scrunchie) | **Needs validation** | |
 | Wearable form factor | **Not demonstrated** | Hardware iteration |
@@ -387,11 +388,14 @@ imports nothing from the state machine, and the z-score is informational only (t
 
   | `profile` | Raw rows | 1-min rollups | Hourly rollups | Daily rollups |
   |---|---|---|---|---|
-  | `night_out` (KAZE, the default; `POST /v1/hr` stores this) | 48 h | 8 days | 90 days | kept |
+  | `night_out` (KAZE, the default; `POST /v1/hr` stores this) | 48 h | 8 days | 8 days | 8 days |
   | `care` (senior mode) | 30 days | 8 days | 90 days | kept |
 
-  `DELETE /v1/me/data` erases the wearer's raw heart rate and raw telemetry at once. On TimescaleDB their
-  rollup rows are not erased; they age out on the schedule above (daily rows are kept).
+  Continuous aggregates have no per-profile retention policy, so the same hourly job also deletes
+  `night_out` rows older than 8 days (the z-score baseline needs 7) from every rollup's materialized
+  hypertable (`stillhere_prune_rollups`, migration `018`).
+  `DELETE /v1/me/data` erases the wearer's raw heart rate and raw telemetry and, on TimescaleDB, every rollup
+  row of theirs (`stillhere_erase_user_rollups`) in the same transaction (`erased.rollup_rows`).
 - **Plain PostgreSQL.** Extensions are created only if `pg_available_extensions` lists them, inside a
   `DO` block that catches errors, and `timescaledb` only when its library is preloaded
   (`shared_preload_libraries`): installed but not preloaded, `CREATE EXTENSION` would end the session, so the
@@ -418,9 +422,11 @@ curl -s "$URL/v1/telemetry/info" -H "X-Admin-Key: $ADMIN_KEY"
   - `SELECT * FROM hypertable_columnstore_stats('scrunchie_telemetry');`
   - `CALL run_job(<job_id of stillhere_retention_job>);`
 
-Tested here on TimescaleDB 2.30.2 with PostgreSQL 16.15 (the bundled `timescale/timescaledb:latest-pg16`)
-and with PostgreSQL 18.6 + Toolkit 1.26.0 (`timescale/timescaledb-ha:pg18`), and on plain PostgreSQL 16
-(pgserver). Tiger Cloud itself has not been tested from this repo. Tiger's docs say new services run
+Tested on TimescaleDB 2.30.2 with PostgreSQL 17.11 built from source (no Docker on that machine; no
+Toolkit, so the 3 Toolkit tests skip): `tests/test_timeseries_tsdb.py` and the whole suite with
+`STILLHERE_TEST_PG_URI` pointing at it. Earlier also with PostgreSQL 16.15 (the bundled
+`timescale/timescaledb:latest-pg16`) and PostgreSQL 18.6 + Toolkit 1.26.0 (`timescale/timescaledb-ha:pg18`),
+and always on plain PostgreSQL 16 (pgserver). Tiger Cloud itself has not been tested from this repo. Tiger's docs say new services run
 PostgreSQL 18 with `timescaledb` and `timescaledb_toolkit` enabled; `info` shows what yours runs.
 
 ## PointClickCare senior mode

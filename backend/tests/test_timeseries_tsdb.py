@@ -10,6 +10,10 @@ Needs one or more TimescaleDB servers; skipped otherwise. Example (local Docker)
   STILLHERE_TSDB_URIS=postgresql://postgres:<pw>@127.0.0.1:55432/postgres,postgresql://postgres:<pw>@127.0.0.1:55433/postgres \\
       ../.venv/bin/python -m pytest -q tests/test_timeseries_tsdb.py
 
+Without Docker: build PostgreSQL 17 and TimescaleDB 2.30 from source (cmake from cmake.org), add
+shared_preload_libraries = 'timescaledb' to postgresql.conf, start it and point STILLHERE_TSDB_URIS at it.
+A second server on the same build without the preload line serves STILLHERE_TSDB_NOPRELOAD_URI.
+
 Each URI gets a fresh database. Background jobs are switched off in it so the tests run them
 on purpose with run_job and nothing changes underneath them.
 """
@@ -126,7 +130,8 @@ async def test_schema_policies_and_versions(conn):
     for view, keep in (("hr_1m", "8 days"), ("telemetry_1m", "8 days"), ("hr_1h", "90 days"),
                        ("telemetry_1h", "90 days")):
         assert jobs[("policy_retention", view)]["config"]["drop_after"] == keep
-    assert jobs[("stillhere_retention_job", None)]["config"] == {"night_out_after": "48 hours"}
+    assert jobs[("stillhere_retention_job", None)]["config"] == {"night_out_after": "48 hours",
+                                                                 "night_out_rollups_after": "8 days"}
 
     info = await timeseries.info(conn)
     assert info["timescaledb"] == versions["timescaledb"] and len(info["continuous_aggregates"]) == 6 + len(gaps_view)
@@ -485,3 +490,106 @@ def test_migrations_fall_back_to_plain_postgres_when_timescaledb_is_installed_bu
         s = c.execute("SELECT mode, note FROM timeseries_setup").fetchone()
         assert s["mode"] == "plain" and "shared_preload_libraries" in s["note"], s
         assert c.execute("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'").fetchone() is None
+
+
+# --- coverage r3: night-out rollups follow the privacy rules of their raw rows -------------------------
+ROLLUPS = ("hr_1m", "hr_1h", "hr_1d", "telemetry_1m", "telemetry_1h", "telemetry_1d")
+
+
+async def _rollup_counts(conn, user, where: str = "true", args: tuple = ()) -> dict:
+    out = {}
+    for v in ROLLUPS:
+        r = await (await conn.execute(
+            f"SELECT profile, sum(n)::bigint AS n FROM {v} WHERE user_id = %s AND {where} GROUP BY profile",
+            (user, *args))).fetchall()
+        out[v] = {x["profile"]: x["n"] for x in r}
+    return out
+
+
+async def test_night_out_rollups_age_out_after_8_days_at_every_layer_and_care_rollups_stay(conn):
+    """Without this a night out's hourly summaries lived 90 days and its daily ones for good."""
+    u = await _user(conn)
+    for profile in ("night_out", "care"):
+        for age in ("10 days", "3 days"):
+            await conn.execute(
+                """INSERT INTO hr_samples (time, user_id, source, bpm, profile)
+                   SELECT date_trunc('day', now() - %s::interval) + interval '6 hours' + make_interval(secs => s),
+                          %s, 'r3', 70, %s FROM generate_series(0, 59) AS s""", (age, u, profile))
+            await conn.execute(
+                """INSERT INTO scrunchie_telemetry (time, user_id, device_id, profile, ax_mg, ay_mg, az_mg)
+                   SELECT date_trunc('day', now() - %s::interval) + interval '6 hours' + make_interval(secs => s),
+                          %s, 'r3', %s, 0, 0, 1000 FROM generate_series(0, 59) AS s""", (age, u, profile))
+    now = (await (await conn.execute("SELECT now() AS now")).fetchone())["now"]
+    start = (now - timedelta(days=11)).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    for v in ROLLUPS:   # bottom layer first
+        await conn.execute("CALL refresh_continuous_aggregate(%s::regclass, %s::timestamptz, %s::timestamptz)",
+                           (v, start, end))
+    for v in ROLLUPS:
+        assert await _materialized_rows(conn, v) > 0, v
+    old = "bucket < now() - interval '8 days'"
+    before = await _rollup_counts(conn, u, old)
+    assert all(before[v] == {"night_out": 60, "care": 60} for v in ROLLUPS), before
+
+    jobs = await _jobs(conn)
+    await _run(conn, jobs[("stillhere_retention_job", None)]["job_id"])
+
+    after_old = await _rollup_counts(conn, u, old)
+    assert all(after_old[v] == {"care": 60} for v in ROLLUPS), after_old          # night_out gone everywhere
+    # The 3-day-old night_out raw rows are gone (48 h), but their summaries stay until 8 days.
+    raw = (await (await conn.execute(
+        "SELECT count(*) AS n FROM hr_samples WHERE user_id = %s AND profile = 'night_out'", (u,))).fetchone())["n"]
+    assert raw == 0
+    recent = await _rollup_counts(conn, u, "bucket >= now() - interval '8 days'")
+    assert all(recent[v] == {"night_out": 60, "care": 60} for v in ROLLUPS), recent
+    # The refresh policies do not bring the old ones back.
+    for view in ROLLUPS:
+        await _run(conn, jobs[("policy_refresh_continuous_aggregate", view)]["job_id"])
+    assert await _rollup_counts(conn, u, old) == after_old
+
+
+async def test_delete_my_data_erases_rollups_and_compressed_raw_rows(api, ts_app_url):
+    """DELETE /v1/me/data on TimescaleDB: raw rows in compressed chunks (more than the default
+    100000-row decompression limit) and every rollup row of the wearer go at once."""
+    from app.security import sha256_hex
+    async with await psycopg.AsyncConnection.connect(ts_app_url, autocommit=True, row_factory=dict_row) as c:
+        uid = str((await (await c.execute(
+            "INSERT INTO users (display_name, api_key_hash) VALUES ('erase-r3', %s) RETURNING id",
+            (sha256_hex("erase-r3-wearer"),))).fetchone())["id"])
+        other = str((await (await c.execute(
+            "INSERT INTO users (display_name) VALUES ('keep-r3') RETURNING id")).fetchone())["id"])
+        for who in (uid, other):
+            out = await timeseries.compression_demo(c, who, days=2, motion_every_s=1.0, hr_every_s=5.0)
+            assert out["available"] is True
+        now = (await (await c.execute("SELECT now() AS now")).fetchone())["now"]
+        await timeseries.refresh(c, now - timedelta(days=4), now)
+        for who in (uid, other):
+            async with c.transaction():
+                await timeseries.seed_synthetic(c, who, start=now - timedelta(hours=1), end=now, profile="night_out",
+                                                hr_every_s=10, motion_every_s=10)
+        await timeseries.refresh(c, now - timedelta(hours=2), now)
+        before = await _rollup_counts(c, uid)
+        assert all(before[v] for v in ROLLUPS), before
+        before_other = await _rollup_counts(c, other)
+        compressed = (await (await c.execute(
+            """SELECT count(*) AS n FROM scrunchie_telemetry WHERE user_id = %s
+                 AND time < now() - interval '25 hours'""", (uid,))).fetchone())["n"]
+        assert compressed > 100000
+    r = await api.delete("/v1/me/data", headers={"Authorization": "Bearer erase-r3-wearer"})
+    assert r.status_code == 200, r.text
+    erased = r.json()["erased"]
+    assert erased["telemetry_rows"] > 100000 and erased["rollup_rows"] > 0
+    async with await psycopg.AsyncConnection.connect(ts_app_url, autocommit=True, row_factory=dict_row) as c:
+        assert await _rollup_counts(c, uid) == {v: {} for v in ROLLUPS}
+        for t in ("scrunchie_telemetry", "hr_samples"):
+            n = (await (await c.execute(f"SELECT count(*) AS n FROM {t} WHERE user_id = %s", (uid,))).fetchone())["n"]
+            assert n == 0, t
+        for view in ROLLUPS:
+            mat = (await (await c.execute(
+                """SELECT format('%%I.%%I', materialization_hypertable_schema, materialization_hypertable_name) AS m
+                     FROM timescaledb_information.continuous_aggregates WHERE view_name = %s""", (view,))).fetchone())["m"]
+            n = (await (await c.execute(f"SELECT count(*) AS n FROM {mat} WHERE user_id = %s", (uid,))).fetchone())["n"]
+            assert n == 0, view
+        # Another wearer's rows are untouched.
+        assert await _rollup_counts(c, other) == before_other
+        assert all(before_other[v] for v in ROLLUPS)

@@ -3,7 +3,7 @@
 device -> bridge (115200 baud, one line per message)
   H,<boot_id>,<seq>,<enmo60_mg>,<tilt_deg>,<fsr_base_mv>,<offbody>    every 1 s
   E,<boot_id>:<seq>,<type>,<json_payload>                             immediately
-  R,...                                                               50 Hz RECORD mode: counted, not forwarded
+  R,<ms>,<ax_mg>,<ay_mg>,<az_mg>[,<fsr_a_mv>,<fsr_b_mv>]              50 Hz RECORD mode (debug telemetry)
 bridge -> device
   C,<led>,<blink_n>,<challenge_id>                                    after every heartbeat / event reply
 
@@ -17,6 +17,12 @@ HTTP
                              A squeeze carries the challenge_id of the prompt the device was showing
                              when it arrived (none if no prompt): a held-back squeeze then answers only
                              that prompt, never one issued while it waited.
+  POST /v1/telemetry/batch   R lines, about once a second (or every 500 rows), clock=device_ms, only while
+                             the heartbeat reply says "telemetry": "debug" (the demo profile; the real
+                             profile sends heartbeats and events only), or always with --telemetry on.
+                             Events never wait behind telemetry. While the server is unreachable at most
+                             2 minutes of rows wait (the oldest are dropped first); a retried batch keeps
+                             its batch_id, so the server stores it once.
   Headers: Authorization: Bearer <device key>, X-Device-Id, X-Boot-Id, X-Seq.
 
 Usage (from backend/):
@@ -30,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import queue
 import sys
@@ -50,6 +57,11 @@ log = logging.getLogger("stillhere.bridge")
 RETRY_STEPS_S = (1.0, 2.0, 4.0, 8.0)
 EVENT_TYPES = {"squeeze", "head_position_change", "offbody", "prompt_shown", "fall_like"}
 PERMANENT_HTTP = {400, 401, 403, 404, 409, 413, 422}
+TEL_BATCH_ROWS = 500       # 10 s at 50 Hz: a batch goes out at once when it is this big
+TEL_EVERY_S = 1.0          # ...or when its oldest row has waited this long
+TEL_MAX_BUFFER = 6000      # 2 minutes at 50 Hz (the server's batch limit); older rows are dropped
+TEL_RETRY_S = 1.0
+TELEMETRY_MODES = ("auto", "on", "off")
 
 
 @dataclass
@@ -143,7 +155,13 @@ def parse_line(line: str, now: float):
         device_ms = payload.pop("device_ms", None) if isinstance(payload.get("device_ms"), int) else None
         return "E", PendingEvent(event_id, boot_id, seq, etype, payload, now, device_ms=device_ms)
     if kind == "R":
-        return "R", None
+        parts = line.split(",")
+        if not 5 <= len(parts) <= 7:
+            return None, "R needs 4 to 6 fields"
+        row = [_num(v) for v in parts[1:]]
+        if any(v is None or not math.isfinite(v) for v in row):
+            return None, "bad R value"
+        return "R", row
     return None, f"unknown line type {kind!r}"
 
 
@@ -168,8 +186,19 @@ class Bridge:
     last_hb_post: float = float("-inf")
     challenge_id: Optional[str] = None  # the prompt the device is showing (from the last C line)
     events: list = field(default_factory=list)
+    # R lines: "auto" forwards them while the heartbeat reply says "telemetry": "debug" (demo profile).
+    telemetry: str = "auto"
+    server_telemetry: bool = False
+    _tel_rows: list = field(default_factory=list)
+    _tel_since: float = 0.0                       # when the oldest waiting row arrived
+    _tel_next: float = float("-inf")              # no telemetry POST before this (after a failure)
+    _tel_inflight: Optional[tuple] = None         # (rows, batch_id) of a batch being retried as-is
     stats: dict = field(default_factory=lambda: {"H": 0, "E": 0, "R": 0, "bad": 0, "hb_ok": 0, "hb_fail": 0,
-                                                 "ev_ok": 0, "ev_retry": 0, "ev_dropped": 0})
+                                                 "ev_ok": 0, "ev_retry": 0, "ev_dropped": 0,
+                                                 "tel_rows_ok": 0, "tel_rows_dropped": 0, "tel_fail": 0})
+
+    def forwarding(self) -> bool:
+        return self.telemetry == "on" or (self.telemetry == "auto" and self.server_telemetry)
 
     # -- input ------------------------------------------------------------------
     def handle_line(self, line: str) -> None:
@@ -180,6 +209,10 @@ class Bridge:
                 log.warning("ignored line (%s): %s", item, line.strip()[:120])
             return
         self.stats[kind] += 1
+        if kind == "R":
+            if self.forwarding():
+                self._queue_row(item)
+            return
         if kind == "H":
             self.last_h = item
         elif kind == "E":
@@ -216,6 +249,60 @@ class Bridge:
             self.last_hb_post = now
             self.post_heartbeat(h)
         self.flush()
+        self.flush_telemetry()
+
+    # -- RECORD-mode telemetry (R lines) -----------------------------------------
+    def _queue_row(self, row: list) -> None:
+        if not self._tel_rows:
+            self._tel_since = self.clock()
+        self._tel_rows.append(row)
+        over = len(self._tel_rows) - TEL_MAX_BUFFER
+        if over > 0:
+            del self._tel_rows[:over]
+            self._tel_inflight = None   # its first rows are gone: what is left goes out as a new batch
+            self.stats["tel_rows_dropped"] += over
+
+    def _drop_telemetry(self) -> None:
+        self._tel_rows.clear()
+        self._tel_inflight = None
+
+    def flush_telemetry(self) -> None:
+        """POST one batch of waiting R rows when it is full or its oldest row has waited TEL_EVERY_S."""
+        if not self._tel_rows:
+            return
+        now = self.clock()
+        if now < self._tel_next:
+            return
+        if self._tel_inflight is None:
+            if len(self._tel_rows) < TEL_BATCH_ROWS and now - self._tel_since < TEL_EVERY_S:
+                return
+            rows = self._tel_rows[:TEL_BATCH_ROWS]
+            boot = self.last_h.boot_id if self.last_h else "-"
+            self._tel_inflight = (rows, f"{boot}:{int(rows[0][0])}:{len(rows)}")
+        rows, batch_id = self._tel_inflight
+        h = self.last_h
+        body = {"rows": rows, "clock": "device_ms", "profile": "night_out", "simulated": False,
+                "batch_id": batch_id}
+        try:
+            r = self.http.post("/v1/telemetry/batch", json=body,
+                               headers=self._headers(h.boot_id if h else "-", h.seq if h else 0))
+            status = r.status_code
+        except httpx.HTTPError as exc:
+            status, err = None, type(exc).__name__
+        if status == 200 or status in PERMANENT_HTTP:
+            del self._tel_rows[:len(rows)]
+            self._tel_inflight = None
+            self._tel_since = now
+            if status == 200:
+                self.stats["tel_rows_ok"] += len(rows)
+            else:
+                self.stats["tel_rows_dropped"] += len(rows)
+                log.error("telemetry batch %s rejected with HTTP %s; dropped", batch_id, status)
+            return
+        self.stats["tel_fail"] += 1
+        self._tel_next = now + TEL_RETRY_S
+        log.warning("telemetry batch %s not delivered (%s); %d rows waiting", batch_id,
+                    f"HTTP {status}" if status else err, len(self._tel_rows))
 
     def post_heartbeat(self, h: Heartbeat) -> bool:
         body: dict = {"enmo60_mg": h.enmo60_mg, "offbody": h.offbody}
@@ -233,9 +320,14 @@ class Bridge:
             return False
         self.stats["hb_ok"] += 1
         try:
-            self._send_cmd(r.json())
+            reply = r.json()
         except ValueError:
-            pass
+            return True
+        if isinstance(reply, dict):
+            self.server_telemetry = reply.get("telemetry") == "debug"
+            if not self.forwarding():
+                self._drop_telemetry()
+        self._send_cmd(reply if isinstance(reply, dict) else {})
         return True
 
     def _order(self) -> list:
@@ -377,6 +469,7 @@ def run(bridge: Bridge, link, stop: Optional[threading.Event] = None, tick_s: fl
     t.start()
     last_report = time.monotonic()
     eof = False
+    tel_fails_at_eof = 0
     while not stop.is_set():
         try:
             line = q.get(timeout=tick_s)
@@ -384,10 +477,13 @@ def run(bridge: Bridge, link, stop: Optional[threading.Event] = None, tick_s: fl
             line = ""
         if line is None:
             eof = True
+            bridge._tel_since = float("-inf")   # send the last telemetry rows now
+            tel_fails_at_eof = bridge.stats["tel_fail"]
         elif line:
             bridge.handle_line(line)
         bridge.tick()
-        if eof and not bridge.events:
+        # At the end of input: events wait to be delivered; telemetry gets one try.
+        if eof and not bridge.events and (not bridge._tel_rows or bridge.stats["tel_fail"] > tel_fails_at_eof):
             break
         if eof:
             time.sleep(tick_s)
@@ -412,6 +508,8 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--device-id", default=os.environ.get("DEMO_DEVICE_ID", "scrunchie-1"))
     ap.add_argument("--heartbeat-s", type=float, default=2.0, help="2 for the demo profile, 15 for real")
     ap.add_argument("--wear-mode", choices=["wrist", "hair"], default=None)
+    ap.add_argument("--telemetry", choices=TELEMETRY_MODES, default="auto",
+                    help="forward RECORD-mode R lines: auto (when the server asks for debug telemetry), on, off")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, stream=sys.stderr,
@@ -425,7 +523,7 @@ def main(argv: Optional[list] = None) -> int:
     link = StdinLink() if args.stdin else SerialLink(args.port, args.baud)
     with httpx.Client(base_url=args.url.rstrip("/"), timeout=5.0) as http:
         bridge = Bridge(http=http, device_id=args.device_id, device_key=key, write_line=link.write_line,
-                        heartbeat_s=args.heartbeat_s, wear_mode=args.wear_mode)
+                        heartbeat_s=args.heartbeat_s, wear_mode=args.wear_mode, telemetry=args.telemetry)
         log.info("bridge %s -> %s as %s", args.port or "stdin", args.url, args.device_id)
         try:
             run(bridge, link)

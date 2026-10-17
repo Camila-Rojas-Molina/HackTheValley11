@@ -1,6 +1,7 @@
 """Device endpoints (BUILD_PLAN §5.8): static per-device bearer key.
 
 POST /v1/device/heartbeat  headers: Authorization: Bearer <key>, X-Device-Id, X-Boot-Id, X-Seq
+                           reply: {state_public, server_time, cmd, telemetry: "debug" | "off"}
 POST /v1/device/events     body: {event_id, type, payload, device_ms}; event_id = boot_id:seq.
                            A replayed event_id returns the cached reply byte for byte.
 Replies only ever carry the public state; a duress alert reads ARMED.
@@ -20,6 +21,14 @@ from ..deps import canonical_json, get_ctx, get_db, require_device
 router = APIRouter(tags=["device"])
 
 OFF_CMD = {"led": "off", "blink_n": 0, "challenge_id": None}
+
+
+def telemetry_mode(profile: Optional[str], public_state: str) -> str:
+    """Heartbeat reply field: "debug" asks the bridge to forward RECORD-mode R lines to
+    POST /v1/telemetry/batch (the demo profile's badged debug telemetry); "off" means heartbeats and
+    events only (the real profile, and no session). Read from the public state, so a session that only
+    looks ended (duress end) answers like a real end."""
+    return "debug" if profile == "demo" and public_state != states.ENDED else "off"
 
 
 class HeartbeatIn(BaseModel):
@@ -123,7 +132,7 @@ async def heartbeat(request: Request, body: Optional[HeartbeatIn] = None):
             if sid is None:
                 now = await engine.db_now(conn)
                 return canonical_json({"state_public": await _idle_public_state(conn, dev["user_id"]),
-                                       "server_time": now.isoformat(), "cmd": OFF_CMD})
+                                       "server_time": now.isoformat(), "cmd": OFF_CMD, "telemetry": "off"})
             await conn.execute("UPDATE sessions SET device_id = %s WHERE id = %s AND device_id IS NULL",
                                (dev["id"], sid))
             if fresh:
@@ -138,7 +147,8 @@ async def heartbeat(request: Request, body: Optional[HeartbeatIn] = None):
             sess = await (await conn.execute("SELECT * FROM sessions WHERE id = %s", (sid,))).fetchone()
             now = await engine.db_now(conn)
             view = engine.public_view(sess)
-    return canonical_json({"state_public": view["state_public"], "server_time": now.isoformat(), "cmd": view["cmd"]})
+    return canonical_json({"state_public": view["state_public"], "server_time": now.isoformat(), "cmd": view["cmd"],
+                           "telemetry": telemetry_mode(sess["profile"], view["state_public"])})
 
 
 @router.post("/v1/device/events")

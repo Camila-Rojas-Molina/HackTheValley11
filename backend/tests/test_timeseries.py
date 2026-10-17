@@ -414,7 +414,26 @@ async def test_delete_my_data_erases_raw_telemetry(client, db):
             """SELECT (SELECT count(*) FROM scrunchie_telemetry WHERE user_id = %s)
                     + (SELECT count(*) FROM telemetry_batches WHERE user_id = %s) AS n""",
             (w.user_id, w.user_id))).fetchone()
-    assert left["n"] == 0
+        mode = (await timeseries.setup(conn))["mode"]
+        views = await (await conn.execute(
+            """SELECT (SELECT count(*) FROM telemetry_1m WHERE user_id = %s)
+                    + (SELECT count(*) FROM telemetry_1h WHERE user_id = %s)
+                    + (SELECT count(*) FROM telemetry_1d WHERE user_id = %s) AS n""",
+            (w.user_id, w.user_id, w.user_id))).fetchone()
+    assert left["n"] == 0 and views["n"] == 0
+    if mode == "plain":   # the rollups are views over the raw rows: nothing else to delete
+        assert r.json()["erased"]["rollup_rows"] == 0
+
+
+async def test_rollup_privacy_functions_are_no_ops_on_plain_postgres(db):
+    async with db.connection() as conn:
+        if (await timeseries.setup(conn))["mode"] != "plain":
+            pytest.skip("TimescaleDB path: tests/test_timeseries_tsdb.py covers it")
+        r = await (await conn.execute(
+            "SELECT stillhere_prune_rollups() AS p, stillhere_erase_user_rollups(gen_random_uuid()) AS e")).fetchone()
+    assert r["p"] == 0 and r["e"] == 0
+    info = timeseries.NIGHT_OUT_ROLLUPS
+    assert info.days == 8
 
 
 async def test_operator_endpoints(client, db):

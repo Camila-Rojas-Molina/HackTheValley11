@@ -59,7 +59,7 @@ def test_parse_lines():
     kind, e = br.parse_line('E,b7:43,squeeze,{"pattern":"duress","k":3,"device_ms":1234}', 5.0)
     assert kind == "E" and e.event_id == "b7:43" and e.duress and e.device_ms == 1234 and "device_ms" not in e.payload
     assert br.parse_line("E,b7:44,head_position_change", 5.0)[1].payload == {}
-    assert br.parse_line("R,1,2,3,4,5,6", 5.0) == ("R", None)
+    assert br.parse_line("R,1,2,3,4,5,6", 5.0) == ("R", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
     for bad in ("H,b7,x,1,2,3,0", "H,b7,1,2", "E,b7-1,squeeze,{}", "E,b7:1,dance,{}", "E,b7:1,squeeze,[1]", "Z,1"):
         assert br.parse_line(bad, 5.0)[0] is None, bad
     assert br.c_line({"led": "amber", "blink_n": 3, "challenge_id": "ab"}) == "C,amber,3,ab"

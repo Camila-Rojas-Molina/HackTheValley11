@@ -8,7 +8,9 @@ the app prunes raw rows itself (maybe_prune).
 Retention per profile (raw rows):
   night_out   48 hours (KAZE: a night out leaves no raw motion or heart-rate trail)
   care        30 days  (senior mode: the care team's trends need history)
-Rollups keep 8 days at 1 min (the z-score baseline needs 7), 90 days at 1 h; daily rows stay.
+Rollups: night_out rows at every layer 8 days (the z-score baseline needs 7; on TimescaleDB the
+retention job deletes them, migration 018); care rows 8 days at 1 min, 90 days at 1 h, daily kept.
+"Delete my data" erases a wearer's raw rows and, on TimescaleDB, their rollup rows too.
 
 Real-time rollups on TimescaleDB: buckets newer than the last materialized one are aggregated
 from raw rows at query time. Materialization is shared by all users, so a row that arrives
@@ -35,6 +37,7 @@ log = logging.getLogger("stillhere.timeseries")
 PROFILES = ("night_out", "care")
 NIGHT_OUT_RAW = timedelta(hours=48)
 CARE_RAW = timedelta(days=30)
+NIGHT_OUT_ROLLUPS = timedelta(days=8)   # every rollup layer; stillhere_prune_rollups() on TimescaleDB
 
 # Ingest limits.
 MAX_ROWS = 6000                       # 2 minutes at 50 Hz
@@ -211,7 +214,8 @@ async def info(conn) -> dict:
     out = {**s, "server_version": (await (await conn.execute("SHOW server_version")).fetchone())["server_version"],
            "timescaledb": exts.get("timescaledb"), "timescaledb_toolkit": exts.get("timescaledb_toolkit"),
            "retention": {"night_out_raw_hours": NIGHT_OUT_RAW.total_seconds() / 3600,
-                         "care_raw_days": CARE_RAW.days, "rollup_1m_days": 8, "rollup_1h_days": 90}}
+                         "care_raw_days": CARE_RAW.days, "rollup_1m_days": 8, "rollup_1h_days": 90,
+                         "night_out_rollups_days": NIGHT_OUT_ROLLUPS.days}}
     if s["mode"] != "timescaledb":
         out["schedule"] = "none on plain PostgreSQL: raw rows are pruned by the app"
         return out
@@ -401,6 +405,14 @@ async def maybe_prune(db) -> bool:
     except Exception as exc:  # best effort; the next batch tries again in 10 minutes
         log.warning("raw-row prune failed: %s", type(exc).__name__)
         return False
+
+
+async def erase_user_rollups(conn, user_id) -> int:
+    """Delete one user's rows from every rollup (for DELETE /v1/me/data). On TimescaleDB the
+    continuous aggregates keep materialized rows after their raw rows are gone, so they are deleted
+    here too; on plain PostgreSQL the rollups are views and this returns 0."""
+    row = await (await conn.execute("SELECT stillhere_erase_user_rollups(%s) AS n", (user_id,))).fetchone()
+    return int(row["n"] or 0)
 
 
 async def erase_user_raw(conn, user_id) -> int:
