@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app import states, timers
-from tests.conftest import DURESS_PIN, PIN, fire, make_world, outbox, session_row, to_state
+from tests.conftest import DURESS_PIN, PIN, fire, make_world, outbox, pending_timers, session_row, to_state
 
 
 @pytest.fixture
@@ -26,6 +26,8 @@ def _norm(value, w):
     ids = {c["id"]: f"C{i + 1}" for i, c in enumerate(w.contacts)}
     if isinstance(value, dict):
         return {k: (ids.get(v, v) if k == "contact_id" else _norm(v, w)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_norm(v, w) for v in value]
     return value
 
 
@@ -277,3 +279,36 @@ async def test_device_unplugged_after_a_duress_pin_messages_the_wearer_like_the_
     # The duress world's contacts were told the link dropped and came back.
     c1 = [o["template"] for o in await outbox(db, duress.session_id, contact_id=duress.contacts[0]["id"])]
     assert "lost_contact" in c1 and "restored" in c1
+
+
+async def test_arming_again_after_a_duress_end_starts_a_fresh_session(client, db, ctx):
+    real, duress = await twin_worlds(client, db)
+    old = {real.user_id: real.session_id, duress.user_id: duress.session_id}
+    await cancel_both(client, real, duress, action="end")
+    arms = {}
+    for w in (real, duress):
+        r = await client.post("/v1/sessions", json={"preset": "night_out"}, headers=w.wearer)
+        assert r.status_code == 200, r.text
+        arms[w.user_id] = r.json()
+    a_real, a_duress = arms[real.user_id], arms[duress.user_id]
+    assert a_duress["session_id"] != old[duress.user_id] and a_real["session_id"] != old[real.user_id]
+    assert a_real["end_at"] and a_duress["end_at"]
+    assert _norm({k: v for k, v in a_real.items() if k not in ("session_id", "end_at")}, real) == \
+           _norm({k: v for k, v in a_duress.items() if k not in ("session_id", "end_at")}, duress)
+    for w in (real, duress):
+        new = arms[w.user_id]["session_id"]
+        kinds = sorted(t["kind"] for t in await pending_timers(db, new))
+        assert kinds == [states.CHECKIN_DUE, states.SESSION_END_DUE]
+        st = (await client.get(f"/v1/sessions/{old[w.user_id]}", headers=w.wearer)).json()
+        assert st["state_public"] == states.ENDED
+    assert await visible(client, real, a_real["session_id"]) == await visible(client, duress, a_duress["session_id"])
+    assert await visible(client, real, old[real.user_id]) == await visible(client, duress, old[duress.user_id])
+    ex_r = (await client.get("/v1/me/export", headers=real.wearer)).json()["sessions"]
+    ex_d = (await client.get("/v1/me/export", headers=duress.wearer)).json()["sessions"]
+    assert len(ex_r) == len(ex_d) == 2
+    assert [len(s["entries"]) for s in ex_r] == [len(s["entries"]) for s in ex_d]
+    # Underneath, the masked alert of the first session keeps escalating.
+    assert (await session_row(db, old[duress.user_id]))["state"].startswith("ESCALATED_")
+    # The device now talks to the new session in both worlds.
+    assert await device_view(client, real) == await device_view(client, duress) == \
+        (states.ARMED, {"led": "off", "blink_n": 0, "challenge_id": False})

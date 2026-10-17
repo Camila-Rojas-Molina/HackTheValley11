@@ -82,11 +82,16 @@ async def heartbeat(request: Request, body: Optional[HeartbeatIn] = None):
                                        "server_time": now.isoformat(), "cmd": OFF_CMD})
             await conn.execute("UPDATE sessions SET device_id = %s WHERE id = %s AND device_id IS NULL",
                                (dev["id"], sid))
-            sess = await (await conn.execute("SELECT * FROM sessions WHERE id = %s FOR UPDATE", (sid,))).fetchone()
-            if fresh and sess["link_state"] == states.LINK_LOST:
-                await engine.apply(conn, sid, states.Event(states.LINK_RESTORED), actor="device",
-                                   event_key=f"restore:{dev['id']}:{boot_id}:{seq}", ctx=ctx)
-                sess = await (await conn.execute("SELECT * FROM sessions WHERE id = %s", (sid,))).fetchone()
+            if fresh:
+                # Every running session of this wearer hears the link is back (a session that only
+                # looks ended, with its masked alert open, runs next to a fresh one).
+                lost = await (await conn.execute(
+                    """SELECT id FROM sessions WHERE user_id = %s AND state <> 'ENDED' AND link_state = %s
+                        ORDER BY created_at FOR UPDATE""", (dev["user_id"], states.LINK_LOST))).fetchall()
+                for r in lost:
+                    await engine.apply(conn, r["id"], states.Event(states.LINK_RESTORED), actor="device",
+                                       event_key=f"restore:{dev['id']}:{boot_id}:{seq}:{r['id']}", ctx=ctx)
+            sess = await (await conn.execute("SELECT * FROM sessions WHERE id = %s", (sid,))).fetchone()
             now = await engine.db_now(conn)
             view = engine.public_view(sess)
     return canonical_json({"state_public": view["state_public"], "server_time": now.isoformat(), "cmd": view["cmd"]})

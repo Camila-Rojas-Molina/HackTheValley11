@@ -59,23 +59,12 @@ async def arm_session(conn, ctx, user: dict, body: ArmIn, actor: str = "wearer")
         device_id = row["id"] if row else None
     existing = await engine.active_session_id(conn, user["id"])
     if existing is not None:
-        prev = await (await conn.execute(
-            """SELECT s.public_state, a.id AS alert_id FROM sessions s
-                 LEFT JOIN alerts a ON a.session_id = s.id AND a.masked AND a.status IN ('OPEN', 'ACKED')
-                WHERE s.id = %s FOR UPDATE OF s""", (existing,))).fetchone()
-        if prev["public_state"] == states.ENDED and prev["alert_id"] is not None:
-            # She "ended" with the duress PIN and is arming again: look like a fresh arm.
-            # The masked alert keeps escalating underneath.
-            await conn.execute("UPDATE sessions SET public_state = 'ARMED' WHERE id = %s", (existing,))
-            await audit.append(conn, chain_key=audit.session_chain(existing), actor=actor, kind="armed",
-                               user_id=user["id"], session_id=existing, alert_id=prev["alert_id"],
-                               to_state=states.ARMED, masked=False,
-                               detail={"profile": profile, "mode": body.mode, "preset": body.preset,
-                                       "interval_s": interval, "window_multiplier": body.window_multiplier})
-            return {"session_id": str(existing), "state_public": states.ARMED, "profile": profile,
-                    "interval_s": interval, "end_at": None,
-                    "who_can_be_alerted": await who_can_be_alerted(conn, user["id"])}
-        raise HTTPException(409, {"error": "already_armed", "session_id": str(existing)})
+        prev = await (await conn.execute("SELECT public_state FROM sessions WHERE id = %s",
+                                         (existing,))).fetchone()
+        # A session "ended" with the duress PIN only looks ended: its masked alert keeps
+        # escalating on its own row, and she gets a fresh session exactly as after a real end.
+        if prev["public_state"] != states.ENDED:
+            raise HTTPException(409, {"error": "already_armed", "session_id": str(existing)})
     sess = await (await conn.execute(
         """INSERT INTO sessions (user_id, device_id, profile, mode, preset, interval_s, window_multiplier, end_at)
            VALUES (%s, %s, %s, %s, %s, %s, %s,

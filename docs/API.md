@@ -271,7 +271,8 @@ Wrong PIN: `403 {"error":"wrong_pin","ok":false}`.
 ### `POST /v1/sessions/{session_id}/end`
 
 Same rules as `cancel`. Reply `{"message":"Ended ✓","ok":true,"state_public":"ENDED"}` for both PINs. With
-the duress PIN the session only looks ended; its alert keeps escalating.
+the duress PIN the session only looks ended; its alert keeps escalating, and arming again starts a fresh
+session, exactly as after a real end.
 
 ### `GET /v1/sessions/{session_id}/timeline`
 

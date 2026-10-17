@@ -416,8 +416,11 @@ async def lower_prompt_deadline(conn, session_id, delivered_at_sql: str = "now()
 
 
 async def active_session_id(conn, user_id) -> Optional[str]:
+    """The wearer's running session: the publicly active one, else one that only looks ended
+    (ended with the duress PIN while its masked alert is still open)."""
     row = await (await conn.execute(
-        "SELECT id FROM sessions WHERE user_id = %s AND state <> 'ENDED' ORDER BY created_at DESC LIMIT 1",
+        """SELECT id FROM sessions WHERE user_id = %s AND state <> 'ENDED'
+            ORDER BY (public_state = 'ENDED'), created_at DESC LIMIT 1""",
         (user_id,))).fetchone()
     return row["id"] if row else None
 

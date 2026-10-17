@@ -50,9 +50,10 @@ async def simulate_hr(db, ctx: Ctx) -> int:
         rows = await (await conn.execute(
             """SELECT u.id AS user_id, coalesce(b.value, %s) AS baseline, now() AS now
                  FROM users u
-                 JOIN sessions s ON s.user_id = u.id AND s.state <> 'ENDED'
                  LEFT JOIN user_baselines b ON b.user_id = u.id AND b.kind = 'hr_rest'
-                WHERE u.is_demo""", (ctx.settings.demo_hr_baseline,))).fetchall()
+                WHERE u.is_demo
+                  AND EXISTS (SELECT 1 FROM sessions s WHERE s.user_id = u.id AND s.state <> 'ENDED')""",
+            (ctx.settings.demo_hr_baseline,))).fetchall()
         since = datetime.fromisoformat(src["since"]) if src.get("since") else None
         n = 0
         for r in rows:
