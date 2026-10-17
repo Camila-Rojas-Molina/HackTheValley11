@@ -20,6 +20,19 @@ async def _configure(conn) -> None:
     await conn.execute("SET TIME ZONE 'UTC'")
 
 
+FREE_TIER_MAX_CONNECTIONS = 25   # a free Tiger Cloud service: fixed, and no connection pooler
+
+
+def connection_budget(settings) -> dict:
+    """The most connections one API process holds (research 1.16): its pool, the Telegram poller's
+    advisory-lock connection (only with a bot token) and the migration runner at start-up. The
+    scripts (simulate.py, the bridges) talk HTTP and open none."""
+    lock = 1 if settings.telegram_enabled else 0
+    return {"pool_max": settings.db_pool_max, "telegram_lock": lock, "migrations_at_start": 1,
+            "total_max": settings.db_pool_max + lock + 1, "scripts": 0,
+            "free_tier_max_connections": FREE_TIER_MAX_CONNECTIONS}
+
+
 class Database:
     def __init__(self, conninfo: str, *, min_size: int = 1, max_size: int = 10, timeout: float = 5.0):
         self.conninfo = conninfo

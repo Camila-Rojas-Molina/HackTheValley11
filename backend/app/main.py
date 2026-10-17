@@ -116,7 +116,7 @@ def create_app(settings: Optional[Settings] = None, *, start_workers: Optional[b
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         _quiet_http_logs()
-        app.state.db = Database(settings.database_url)
+        app.state.db = Database(settings.database_url, max_size=settings.db_pool_max)
         app.state.ctx = Ctx(settings=settings, secret=settings.app_secret or "")
         await app.state.db.open(wait=False)
         stop = asyncio.Event()

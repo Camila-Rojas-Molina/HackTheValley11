@@ -32,6 +32,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .. import timeseries
+from ..db import connection_budget
 from ..deps import get_db, require_admin, require_device, require_wearer
 
 router = APIRouter(tags=["telemetry"])
@@ -152,7 +153,12 @@ async def aggregates(request: Request, series: Literal["hr", "motion"] = "hr",
 async def telemetry_info(request: Request):
     require_admin(request)
     async with get_db(request).connection() as conn:
-        return await timeseries.info(conn)
+        out = await timeseries.info(conn)
+        server_max = (await (await conn.execute("SHOW max_connections")).fetchone())["max_connections"]
+    # Tiger free services have 25 connections and no pooler (research 1.16): show the budget.
+    out["connections"] = {**connection_budget(request.app.state.ctx.settings),
+                          "server_max_connections": int(server_max)}
+    return out
 
 
 @router.post("/v1/telemetry/refresh")

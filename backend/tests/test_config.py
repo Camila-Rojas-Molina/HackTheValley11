@@ -86,3 +86,30 @@ async def test_unset_app_secret_with_a_remote_database_logs_a_warning(caplog, db
             assert "APP_SECRET" not in caplog.text
             await engine.load_secret(conn, remote)
     assert "APP_SECRET is not set" in caplog.text
+
+
+# --- research 1.16: a small database pool, so the API stays well under Tiger's 25 connections ---------
+@pytest.mark.parametrize("raw,expected", [(None, 8), ("6", 6), ("abc", 8), ("0", 1), ("100", 20), ("", 8)])
+def test_db_pool_max_comes_from_the_environment_and_is_bounded(raw, expected):
+    env = {} if raw is None else {"DB_POOL_MAX": raw}
+    assert Settings.from_env(env).db_pool_max == expected
+
+
+def test_connection_budget_stays_well_under_a_free_tiger_service():
+    from app.db import connection_budget
+    budget = connection_budget(Settings.from_env({}))
+    assert budget == {"pool_max": 8, "telegram_lock": 0, "migrations_at_start": 1, "total_max": 9,
+                      "scripts": 0, "free_tier_max_connections": 25}
+    with_bot = connection_budget(Settings.from_env({"TELEGRAM_BOT_TOKEN": "123:abc", "DB_POOL_MAX": "20"}))
+    assert with_bot["total_max"] == 22 and with_bot["telegram_lock"] == 1
+
+
+async def test_the_app_pool_uses_the_setting(app, settings):
+    assert app.state.db.pool.max_size == settings.db_pool_max == 8
+
+
+async def test_telemetry_info_reports_the_connection_budget(client):
+    from tests.conftest import ADMIN_KEY
+    body = (await client.get("/v1/telemetry/info", headers={"X-Admin-Key": ADMIN_KEY})).json()
+    conn = body["connections"]
+    assert conn["pool_max"] == 8 and conn["server_max_connections"] >= 25 and conn["total_max"] <= 12

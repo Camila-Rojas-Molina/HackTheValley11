@@ -680,6 +680,15 @@ and compression stats (the last four on TimescaleDB only). Shortened:
 On plain PostgreSQL: `"mode":"plain"` and `"schedule":"none on plain PostgreSQL: raw rows are pruned by the app"`.
 `note` holds the reason when the TimescaleDB setup failed and the plain path was taken instead.
 
+`connections` is the most this API process can hold: the pool (`DB_POOL_MAX`, default 8), the Telegram
+poller's lock connection (only with a bot token) and the migration runner at start-up; the scripts talk HTTP
+and open none. A free Tiger service allows 25 connections and has no pooler, so keep `total_max` well under it.
+
+```json
+"connections":{"pool_max":8,"telegram_lock":1,"migrations_at_start":1,"total_max":10,"scripts":0,
+               "free_tier_max_connections":25,"server_max_connections":25}
+```
+
 ### `POST /v1/telemetry/refresh`
 
 `X-Admin-Key`. `{"hours": 2}` (default 46, at most 47): materializes the rollups for that range, bottom layer

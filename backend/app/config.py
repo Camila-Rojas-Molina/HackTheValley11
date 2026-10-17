@@ -82,6 +82,14 @@ def _opt(value: Optional[str]) -> Optional[str]:
     return value or None
 
 
+def _int_in(value: Optional[str], default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
 def _secret(name: str, value: Optional[str]) -> Optional[str]:
     """A key from the environment; a placeholder from .env.example counts as unset."""
     v = _opt(value)
@@ -114,6 +122,9 @@ class Settings:
     run_workers: bool = True
     auto_migrate: bool = True
     demo_seed: bool = True
+    # Database pool per API process (research 1.16). A free Tiger service has 25 connections and no
+    # pooler: 8 + the Telegram poller's lock connection + the startup migration stays well under it.
+    db_pool_max: int = 8
     profiles: dict = field(default_factory=lambda: PROFILES)
 
     @property
@@ -151,6 +162,7 @@ class Settings:
             run_workers=_bool(e.get("RUN_WORKERS"), True),
             auto_migrate=_bool(e.get("AUTO_MIGRATE"), True),
             demo_seed=_bool(e.get("DEMO_SEED"), True),
+            db_pool_max=_int_in(e.get("DB_POOL_MAX"), 8, 1, 20),
         )
         values.update(overrides)
         return cls(**values)
