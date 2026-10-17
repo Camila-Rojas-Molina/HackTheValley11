@@ -31,7 +31,7 @@ The generator's day-to-day variation is a chosen demo value and the scripted cha
 large next to it; real data will be noisier, and how early a change shows up here comes
 from the script, not from any study.
 
-Card. score 0-100 is the sum of today's rule contributions (55 + 45 at most). The level does
+Card. score is a 0-100 change score (research 1.8), the sum of today's rule contributions (55 + 45 at most). The level does
 not follow the score (research 1.5): "worth a look this shift" when one rule fires today;
 "review this shift" only when 2 different rules fired in the last 3 days, one of them today
 (Skubic 2015: a multi-feature rule matched an SVM at about 86% accuracy, while single-feature
@@ -137,6 +137,12 @@ MED_NOTE = "Medication context raises the priority one level; it never starts an
 # The line every card carries (research 1.7). The research wording ends in a word the project's
 # wording rules ban (BUILD_PLAN 7.3), so the card says "not a medical assessment" instead.
 PATTERN_NOTE = "Pattern change only - not a medical assessment."
+
+# The 0-100 number is a change score (research 1.8): how far this resident's patterns moved from
+# their own usual. It ranks change only; nothing on the card looks ahead.
+SCORE_LABEL = "change score (0-100)"
+SCORE_NOTE = ("How far today's patterns moved from this resident's own usual: the sum of the rule points. "
+              "It ranks change only; the level comes from which rules fired, not from this number.")
 
 EXPERIMENTAL_STATUS = "experimental, not scored"
 # Why each experimental signal is on the card but outside the score. Source: research 1.1,
@@ -380,7 +386,7 @@ def suggested_check(level: str, scored_rules: Sequence[str], missing: Sequence[s
 def local_briefing(card: dict) -> str:
     """Care-team briefing from the finished card. Plain template; it never changes the card."""
     fired = [r for r in card["rules"] if r["contribution"] > 0]
-    parts = [f"{card['display_name']}: {card['level']}, score {card['score']}/100 as of {card['as_of']}."]
+    parts = [f"{card['display_name']}: {card['level']}, change score {card['score']}/100 as of {card['as_of']}."]
     if fired:
         parts += [r["explanation"] for r in fired]
     else:
@@ -486,6 +492,8 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "display_name": display_name,
         "synthetic": True,
         "score": score,
+        "score_label": SCORE_LABEL,
+        "score_note": SCORE_NOTE,
         "level": level,
         "rules": rules,
         "experimental": [experimental_sway(recent, baseline), experimental_balance(recent, baseline)],

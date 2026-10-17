@@ -604,3 +604,20 @@ def test_every_card_says_pattern_change_only():
     for _, card in scored():
         assert card["pattern_note"] == care.PATTERN_NOTE
         assert card["briefing"].endswith(care.PATTERN_NOTE)
+
+
+# --- research 1.8: the 0-100 number is a change score, never a risk score ---------------------------
+def test_score_is_labelled_a_change_score():
+    assert care.SCORE_LABEL == "change score (0-100)"
+    for _, card in scored():
+        assert card["score_label"] == care.SCORE_LABEL and card["score_note"] == care.SCORE_NOTE
+        assert f"change score {card['score']}/100" in card["briefing"]
+    assert "risk" not in (care.SCORE_LABEL + care.SCORE_NOTE).lower()
+    assert "own usual" in care.SCORE_NOTE
+
+
+def test_template_and_prompt_call_it_a_change_score():
+    from app import vultr
+    card = scored()[7][1]
+    assert f"(change score {card['score']}/100)" in vultr.template_briefing(card)
+    assert "change score out of 100" in vultr.SYSTEM_PROMPT and "never call it a risk" in vultr.SYSTEM_PROMPT

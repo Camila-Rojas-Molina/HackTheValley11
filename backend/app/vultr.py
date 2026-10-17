@@ -104,7 +104,8 @@ _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 SYSTEM_PROMPT = (
     "You write a short briefing for a nursing-home care team. The JSON you receive is the complete "
     "output of a fixed rule engine run on SYNTHETIC demo data. Restate only what it contains: the level, "
-    "the score out of 100, the rules that contributed most (observed value against the resident's own "
+    "the change score out of 100 (change from the resident's own usual; never call it a risk score), "
+    "the rules that contributed most (observed value against the resident's own "
     "baseline, with units) and the suggested check. Write two or three plain sentences, at most 70 words, "
     "with no lists, headings or markdown. Refer to the person only as 'the resident'. Do not name or "
     "suggest any illness or medical condition, do not guess causes, do not predict what will happen or "
@@ -214,7 +215,7 @@ def template_briefing(card: Mapping) -> str:
         level = str(card.get("level") or "").strip().lower()
         phrase = LEVEL_PHRASES.get(level, "review the rule breakdown")
         score = _num(card.get("score"))
-        text = f"{_prefix(card)}: {phrase}" + (f" (score {score}/100)." if score is not None else ".")
+        text = f"{_prefix(card)}: {phrase}" + (f" (change score {score}/100)." if score is not None else ".")
         parts = [_rule_phrase(r) for r in _top_rules(card)]
         text += f" Main changes: {'; '.join(parts)}." if parts else " No rule added to the score."
         check = card.get("suggested_check")
@@ -471,7 +472,7 @@ def main() -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     print(json.dumps(status(), indent=1))
     card = sample_card()
-    print(f"card: {card['display_name']}, {card['level']}, score {card['score']}/100 (rule engine, synthetic)")
+    print(f"card: {card['display_name']}, {card['level']}, change score {card['score']}/100 (rule engine, synthetic)")
     result = briefing(card)
     print(f"source: {result['source']}" + (f" ({result['model']})" if result["model"] else ""))
     print(result["text"])

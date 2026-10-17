@@ -122,7 +122,7 @@ def test_contract_signature_and_default_env(monkeypatch):
 def test_template_is_deterministic_labelled_and_complete():
     a, b = vultr.template_briefing(CARD), vultr.template_briefing(copy.deepcopy(CARD))
     assert a == b
-    assert a.startswith("Rosa Example (SYNTHETIC): worth watching (score 64/100).")
+    assert a.startswith("Rosa Example (SYNTHETIC): worth watching (change score 64/100).")
     assert "Suggested check: CNA: watch one sit-to-stand" in a
     # Highest contribution first, at most three rules.
     assert a.index("swayed 37%") < a.index("19 s to settle") < a.index("9 restless periods")
