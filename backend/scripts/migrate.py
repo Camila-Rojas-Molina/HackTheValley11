@@ -1,6 +1,6 @@
 """Tiny migration runner: applies backend/migrations/*.sql in name order, once each.
 
-Usage:  DATABASE_URL=postgresql://... python scripts/migrate.py
+Usage (from backend/):  DATABASE_URL=postgresql://... ../.venv/bin/python scripts/migrate.py
 Each file runs in its own transaction and is recorded in schema_migrations with
 its sha256. A Postgres advisory lock keeps two runners from racing.
 """

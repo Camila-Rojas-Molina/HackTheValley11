@@ -20,3 +20,16 @@ def test_api_md_labels_the_sensor_thresholds_as_untested_assumptions():
     assert hr and still
     for chunk in hr + still:
         assert "untested" in chunk and "assumption" in chunk, chunk
+
+
+def test_readme_commands_use_the_project_venv_python():
+    """macOS here has no bare `python`, and the system python3 lacks the project's packages."""
+    bare = re.compile(r"(^|[\s`'\"(])python3?\s")
+    found = []
+    for path in (REPO / "README.md", REPO / "backend" / "README.md"):
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if bare.search(line):
+                found.append(f"{path.relative_to(REPO)}:{i}: {line.strip()}")
+    assert not found, "\n".join(found)
+    usage = (REPO / "backend" / "scripts" / "migrate.py").read_text(encoding="utf-8").split('"""')[1]
+    assert not bare.search(usage), usage

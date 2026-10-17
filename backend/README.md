@@ -40,7 +40,7 @@ Postgres options:
 - Tiger Cloud: put the service URL in `DATABASE_URL`. Consider
   `ALTER ROLE <user> SET idle_in_transaction_session_timeout = '10s'`; the app
   also sets it per connection.
-- Migrations alone: `DATABASE_URL=... python scripts/migrate.py`
+- Migrations alone (from `backend/`): `DATABASE_URL=... ../.venv/bin/python scripts/migrate.py`
 
 `001_core.sql` needs plain PostgreSQL only. `hr_samples` is a plain table so a
 later migration can turn it into a hypertable when TimescaleDB is present.
