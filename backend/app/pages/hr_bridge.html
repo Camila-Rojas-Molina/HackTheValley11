@@ -55,6 +55,7 @@
   .stat { background: var(--bg); border-radius: 10px; padding: 10px; }
   .stat b { display: block; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
   .warn { color: var(--err); font-weight: 650; }
+  .stale.on { color: var(--err); font-weight: 750; }
   ol.log { margin: 8px 0 0; padding-left: 1.2em; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
            max-height: 14rem; overflow: auto; }
   .note { color: var(--muted); font-size: .9rem; }
@@ -70,6 +71,8 @@
     <span class="badge" id="badge">NOT CONNECTED</span>
     <div class="reading"><span class="bpm" id="bpm">--</span><span class="unit">bpm</span></div>
     <div class="meta" id="meta">No samples yet.</div>
+    <div class="meta"><span id="stale" class="stale">no heart rate posted yet</span></div>
+    <p id="dupes" class="warn" hidden></p>
     <div class="meta" id="rr"></div>
     <div class="stats">
       <div class="stat">Posted<b id="n-sent">0</b></div>
@@ -145,7 +148,7 @@
   var MAX_QUEUE = 300;           // 5 min at 1 Hz; the server re-stamps samples older than 5 min
   var queue = [], inflight = false, sent = 0, failed = 0, authBroken = false;
   var device = null, characteristic = null, wantConnected = false, backoff = 1000, reconnectTimer = null;
-  var simTimer = null, simBpm = 72, simBase = 72, lastSampleAt = 0, mode = "idle";
+  var simTimer = null, simBpm = 72, simBase = 72, lastSampleAt = 0, lastPostOkAt = 0, mode = "idle";
 
   $("key").value = sget("sh_hr_key") || "";
   $("device").value = sget("sh_hr_device") || "";
@@ -218,7 +221,7 @@
     counters();
     fetch("/v1/hr", {method: "POST", headers: headers(), body: JSON.stringify(body)})
       .then(function (r) {
-        if (r.ok) { sent += batch.length; setLink("ok"); return true; }
+        if (r.ok) { sent += batch.length; lastPostOkAt = Date.now(); setLink("ok"); return true; }
         if (r.status === 401 || r.status === 403) {
           authBroken = true; setLink("wrong key"); log("POST /v1/hr: " + r.status + " (check the key)");
           queue = batch.concat(queue);
@@ -250,11 +253,32 @@
       ? "RR intervals: " + r.rr_ms.length + (r.rr_synthetic ? " (computed from bpm by the relay, stored as rr_synthetic)" : " (stored, not analysed)")
       : "RR intervals: none sent");
   }
+  // "HR stale" after 15 s with no accepted post (research 1.12). Display only: the server never
+  // waits on heart rate; a check-in is only ever brought forward when it goes missing.
+  var STALE_MS = 15000;
   setInterval(function () {                // display only
     if (lastSampleAt && Date.now() - lastSampleAt > 10000) {
       $("meta").textContent = "No sample for " + Math.round((Date.now() - lastSampleAt) / 1000) + " s.";
     }
+    var stale = !lastPostOkAt || Date.now() - lastPostOkAt > STALE_MS;
+    $("stale").textContent = !lastPostOkAt ? "no heart rate posted yet" : (stale ? "HR stale" : "HR live");
+    $("stale").className = stale ? "stale on" : "stale";
   }, 1000);
+  // Another bridge posting for the same wearer doubles every sample: warn (display only).
+  setInterval(function () {
+    if (!$("key").value.trim() || authBroken) return;
+    fetch("/v1/hr/status", {headers: headers()})
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        if (!s) return;
+        var mine = $("source").value;
+        var others = s.sources.filter(function (x) { return x.source !== mine; }).map(function (x) { return x.source; });
+        $("dupes").hidden = !others.length;
+        $("dupes").textContent = others.length ? "Another source is posting heart rate for this wearer (" +
+          others.join(", ") + "). Run only one bridge, or every reading is counted twice." : "";
+      })
+      .catch(function () {});
+  }, 5000);
 
   // ------------------------------------------------------------- Web Bluetooth
   function onHrm(event) {

@@ -4,6 +4,9 @@ simulator). Rules read hr_samples; they can only bring a check-in forward.
 
 POST /v1/hr  {user_id?, source, simulated, samples:[{t, bpm, rr_ms[], rr_synthetic}]}
              or a single sample {ts, bpm, rr_ms, rr_synthetic, source, simulated}
+GET  /v1/hr/status   "HR live" / "HR stale" (no sample for 15 s) and the sources posting in the
+             last minute. Display only (research 1.12): stale or missing heart rate never delays
+             a check-in; the heart-rate-lost rule (hr_lost_s) only brings one forward.
 Auth: the device key (Authorization + X-Device-Id) or the wearer key.
 GET /hr-bridge serves the Web Bluetooth bridge page (pages/hr_bridge.html).
 """
@@ -29,6 +32,9 @@ MAX_SKEW = timedelta(minutes=5)
 # minimum-sample check counts at most one reading per 5-second slot, never notifications.
 READING_SLOT_S = 5
 MIN_READINGS = 5
+# Display only (research 1.12): "HR stale" after this long with no sample. The check-in schedule
+# never waits on heart rate; after hr_lost_s without it the check-in is brought forward instead.
+HR_STALE_S = 15
 PAGES = Path(__file__).resolve().parent.parent / "pages"
 
 
@@ -119,6 +125,30 @@ async def ingest_hr(request: Request, body: HrIn):
                     """INSERT INTO hr_samples (time, user_id, source, simulated, bpm, rr_ms, rr_synthetic)
                        VALUES (%s, %s, %s, %s, %s, %s, %s)""", rows)
     return {"ok": True, "inserted": len(rows)}
+
+
+@router.get("/v1/hr/status")
+async def hr_status(request: Request):
+    db = get_db(request)
+    async with db.connection() as conn:
+        user_id = await _hr_user(request, conn, None)
+        row = await (await conn.execute(
+            """SELECT now() AS now, max(time) AS last FROM hr_samples WHERE user_id = %s""", (user_id,))).fetchone()
+        sources = await (await conn.execute(
+            """SELECT source, count(*) AS n, max(time) AS last, bool_or(simulated) AS simulated FROM hr_samples
+                WHERE user_id = %s AND time > now() - interval '60 seconds'
+                GROUP BY source ORDER BY max(time) DESC""", (user_id,))).fetchall()
+    last = row["last"]
+    age = (row["now"] - last).total_seconds() if last else None
+    stale = age is None or age > HR_STALE_S
+    label = "no heart rate yet" if last is None else ("HR stale" if stale else "HR live")
+    return {"label": label, "stale": stale, "stale_after_s": HR_STALE_S, "display_only": True,
+            "last_at": last.isoformat() if last else None, "age_s": round(age, 1) if age is not None else None,
+            "sources": [{"source": r["source"], "samples_60s": r["n"], "last_at": r["last"].isoformat(),
+                         "simulated": bool(r["simulated"])} for r in sources],
+            "duplicate_sources": len(sources) > 1,
+            "note": ("Display only. Stale or missing heart rate never delays a check-in; without heart rate "
+                     "for the profile's hr_lost_s the next check-in is brought forward.")}
 
 
 @router.post("/v1/hr/calibrate")

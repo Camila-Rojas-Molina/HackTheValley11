@@ -199,6 +199,21 @@ value per slot.
 {"ok": true, "baseline_bpm": 71.0, "samples": 60, "readings": 12, "simulated": false}
 ```
 
+### `GET /v1/hr/status`
+
+Device key or wearer key. Display only: `"HR live"`, or `"HR stale"` when no sample arrived for 15 s
+(`"no heart rate yet"` before the first). Stale or missing heart rate never delays a check-in; after the
+profile's `hr_lost_s` (120 s) without heart rate the next check-in is brought forward instead. `sources`
+lists every source that posted in the last minute; `duplicate_sources` is true when two bridges post for
+the same wearer (run only one: the bleak bridge, the Pulsoid bridge or `/hr-bridge`).
+
+```json
+{"label":"HR stale","stale":true,"stale_after_s":15,"display_only":true,"last_at":"2026-10-17T11:02:41.5+00:00",
+ "age_s":21.3,"sources":[{"source":"heartcast-ble","samples_60s":39,"last_at":"2026-10-17T11:02:41.5+00:00",
+ "simulated":false}],"duplicate_sources":false,
+ "note":"Display only. Stale or missing heart rate never delays a check-in; …"}
+```
+
 ### `GET /hr-bridge`
 
 HTML page. Chrome Web Bluetooth reads the standard Heart Rate Service (0x180D, characteristic 0x2A37)
