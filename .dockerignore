@@ -1,0 +1,27 @@
+# Build context for the backend image: only backend/app, backend/migrations,
+# backend/scripts and backend/requirements.txt are copied. Keep everything else
+# out, above all local secrets and database data.
+.git
+.github
+**/.env
+**/.env.*
+**/.venv
+**/venv
+**/.pgdata*
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+**/*.log
+backend/tests
+docs
+*.md
+**/*.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+.vscode
+.idea
+.DS_Store
