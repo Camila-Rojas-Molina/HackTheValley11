@@ -12,8 +12,9 @@ are simply high. The script is ground truth for checking the rules; the rules ne
 Rules. Each compares a resident with their own baseline, never with other residents:
   rise_to_settle_time   after standing up, the time until balance (accelerometer) and
                         heart rate have both settled; same two windows
-  night_restlessness    minutes moving at night; both of the last 2 nights must be above
-                        their usual, so one bad night scores nothing
+  night_restlessness    minutes moving at night; both of the last 2 nights must be at least
+                        2.5 SD (z) and 15% above their 14-day usual, and 15 min more, so one
+                        bad night scores nothing (research 1.4)
 Postural sway is shown on the card greyed out, "experimental, not scored" (research 1.1):
 traditional sway measures were not associated with the outcome studied in 738 older adults
 (Zhou 2017, PMC5462759), and sway measured at the wrist or in the hair is not validated.
@@ -67,16 +68,25 @@ MIN_NIGHT_WEAR_MIN = 240.0      # a night counts only if worn this long (of 420 
 # in proportion (40:30 -> 55:45) when sway left the score (research 1.1).
 SETTLE_BANDS = ((0.60, 55), (0.40, 40), (0.25, 25))
 SETTLE_MIN_CHANGE_S = 5.0       # and at least this many seconds slower
-NIGHT_BANDS = ((1.00, 45), (0.50, 25))  # each of the last 2 nights at least this far above
-NIGHT_MIN_CHANGE_MIN = 15.0     # and at least this many minutes above, each night
+# Night (research 1.4): each of the last 2 nights at z >= +2.5 against the 14-day baseline
+# (Skubic 2015, PMC4848095: alerts at 2.5-4 SD; bed restlessness was the best-rated feature)
+# AND at least +15% (Leung 2023, PMC10431933: >15% change vs own baseline) AND 15 min more.
+NIGHT_Z = 2.5
+NIGHT_MIN_REL = 0.15
+NIGHT_MIN_CHANGE_MIN = 15.0     # kept from the first version: minutes, not only proportions
+NIGHT_BANDS = ((4.0, 45), (2.5, 25))  # (smaller of the 2 nights' z, points): Skubic's 2.5-4 SD span
+# A baseline SD is never taken below 5% of the baseline mean, so a very steady fortnight cannot
+# turn a few minutes into a large z (assumption).
+SD_FLOOR_FRAC = 0.05
 WATCH_FROM = 15
 CHECK_TODAY_FROM = 45
 
 THRESHOLDS = {
     SETTLE: ("+25% -> 25, +40% -> 40, +60% -> 55 points, and at least 5 s slower; 8+ stand-ups per 48 h; "
              "7+ valid days in the 14-day baseline"),
-    NIGHT: ("both of the last 2 nights +50% -> 25, +100% -> 45 points, and at least 15 min above; nights worn 4 h+; "
-            "7+ valid nights in the 14-day baseline"),
+    NIGHT: ("both of the last 2 nights (2 nights in a row) at z >= +2.5 against the 14-day baseline and +15% "
+            "and 15 min above it: smaller z >= 2.5 -> 25, >= 4 -> 45 points; baseline SD at least 5% of its mean; "
+            "nights worn 4 h+; 7+ valid nights in the 14-day baseline"),
     "levels": ("watch from 15 points; check today from 45 points or any rule in its top band; "
                "not enough data below 15 points when a rule could not score"),
 }
@@ -130,6 +140,17 @@ def _band(change: float, bands: Sequence[tuple[float, int]]) -> tuple[int, Optio
         if change >= cut:
             return points, cut
     return 0, None
+
+
+def _sd(values: Sequence[float], mean: float) -> float:
+    """Sample SD, floored at SD_FLOOR_FRAC of the mean."""
+    raw = statistics.stdev(values) if len(values) > 1 else 0.0
+    return max(raw, SD_FLOOR_FRAC * abs(mean))
+
+
+SOURCES = {
+    NIGHT: "Skubic 2015 (PMC4848095: 14-day baseline, 2.5-4 SD); Leung 2023 (PMC10431933: >15%)",
+}
 
 
 def _pct(change: float) -> int:
@@ -232,33 +253,38 @@ def rule_night(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Option
 
     r, b = nights(recent), nights(baseline)
     out = _rule(NIGHT, "min", 0, r, b)
+    out.update(source=SOURCES[NIGHT], baseline_sd=None, z=None)
     if len(b) < WARMUP_DAYS:
         return _warming_up(out, len(b), "nights")
     if len(r) < WINDOW_DAYS or _mean(b) <= 0:
         return _not_enough(out, f"needs both of the last {WINDOW_DAYS} nights worn {MIN_NIGHT_WEAR_MIN / 60:g} h+")
     base = _mean(b)
+    sd = _sd(b, base)
     obs = _mean(r)
+    zs = [(x - base) / sd for x in r]
 
-    def above(x: float) -> bool:
-        return x / base - 1.0 >= NIGHT_BANDS[-1][0] and x - base >= NIGHT_MIN_CHANGE_MIN
+    def above(x: float, z: float) -> bool:
+        return z >= NIGHT_Z and x / base - 1.0 >= NIGHT_MIN_REL and x - base >= NIGHT_MIN_CHANGE_MIN
 
-    low = min(r)
-    points, cut = _band(low / base - 1.0, NIGHT_BANDS) if low - base >= NIGHT_MIN_CHANGE_MIN else (0, None)
-    out.update(observed=round(obs), baseline=round(base), change_pct=_pct(obs / base - 1.0), scored=True,
-               contribution=points, top_band=points == NIGHT_BANDS[0][1])
+    n_above = sum(1 for x, z in zip(r, zs) if above(x, z))
+    points, cut = _band(min(zs), NIGHT_BANDS) if n_above == len(r) else (0, None)
+    out.update(observed=round(obs), baseline=round(base), baseline_sd=round(sd, 1), z=[round(z, 1) for z in zs],
+               change_pct=_pct(obs / base - 1.0), scored=True, contribution=points,
+               top_band=points == NIGHT_BANDS[0][1])
     shown = " and ".join(f"{x:.0f}" for x in r)
-    n_above = sum(1 for x in r if above(x))
+    shown_z = " and ".join(f"{z:+.1f}" for z in zs)
+    usual = f"{base:.0f} min in their own 14-day baseline, SD {sd:.1f} min"
     if points:
         out["explanation"] = (f"More movement at night than usual on both of the last 2 nights ({shown} min vs "
-                              f"{base:.0f} min in their own 14-day baseline); each night at or above the "
-                              f"+{_pct(cut)}% band, {points} points.")
+                              f"{usual}; z {shown_z}); each night at least {NIGHT_Z:g} SD, "
+                              f"+{_pct(NIGHT_MIN_REL)}% and {NIGHT_MIN_CHANGE_MIN:g} min above, {points} points.")
     elif n_above == 1:
-        out["explanation"] = (f"One of the last 2 nights had more movement than usual ({shown} min vs "
-                              f"{base:.0f} min in their own 14-day baseline). This rule needs 2 nights in a row, "
-                              f"so no points.")
+        out["explanation"] = (f"One of the last 2 nights had more movement than usual ({shown} min vs {usual}). "
+                              f"This rule needs 2 nights in a row, so no points.")
     else:
-        out["explanation"] = (f"Movement at night over the last 2 nights: {shown} min vs {base:.0f} min in "
-                              f"their own 14-day baseline; no points.")
+        out["explanation"] = (f"Movement at night over the last 2 nights: {shown} min vs {usual} (z {shown_z}); "
+                              f"under {NIGHT_Z:g} SD, +{_pct(NIGHT_MIN_REL)}% and {NIGHT_MIN_CHANGE_MIN:g} min "
+                              f"above on both nights, no points.")
     return out
 
 
@@ -385,13 +411,14 @@ SCRIPTS: dict[str, Script] = {s.name: s for s in (
            onset=21, settle_per_day=0.08),
     Script("slower_settle_steep", "Settling after standing up slows 9% of usual a day from day 22.", True,
            (SETTLE,), onset=21, settle_per_day=0.09),
-    Script("night_restless", "Night-time movement rises 30% of usual a night from night 24.", True, (NIGHT,),
-           night_onset=23, night_per_day=0.30),
-    Script("clustered", "Sway and settling time rise gradually from day 22, night-time movement from night 24.",
-           True, (SETTLE, NIGHT), onset=21, sway_per_day=0.05, settle_per_day=0.08,
-           night_onset=23, night_per_day=0.30),
-    Script("clustered_mild", "Sway rises gradually from day 22, night-time movement from night 24.", True,
-           (NIGHT,), onset=21, sway_per_day=0.045, night_onset=23, night_per_day=0.28),
+    # Night changes start on the last 2 nights, so the rolling baseline (and its SD) stays clean.
+    Script("night_restless", "Night-time movement up on the last 2 nights (1.9x, then 2.8x usual).", True,
+           (NIGHT,), night_onset=26, night_per_day=0.90),
+    Script("clustered", "Sway and settling time rise gradually from day 22; night-time movement up on the "
+           "last 2 nights.", True, (SETTLE, NIGHT), onset=21, sway_per_day=0.05, settle_per_day=0.08,
+           night_onset=26, night_per_day=0.85),
+    Script("clustered_mild", "Sway rises gradually from day 22; night-time movement up on the last 2 nights.",
+           True, (NIGHT,), onset=21, sway_per_day=0.045, night_onset=26, night_per_day=0.80),
     Script("one_off_bad_night", "One bad night before day 27 (3x usual movement), then back to usual.", False,
            bad_night_day=26),
     Script("one_off_bad_night_last", "One bad night before day 28 (3x usual movement).", False,
@@ -435,10 +462,10 @@ def generate_resident(resident_id: str, script: Script, seed: int, end_day: date
     rng = random.Random(f"stillhere-care:{seed}:{resident_id}")
     if script.high_usual:
         sway0, sway_settle0, hr_settle0 = rng.uniform(0.13, 0.15), rng.uniform(34, 40), rng.uniform(38, 46)
-        night0 = rng.uniform(80, 100)
+        night0 = rng.uniform(100, 120)
     else:
         sway0, sway_settle0, hr_settle0 = rng.uniform(0.05, 0.09), rng.uniform(14, 22), rng.uniform(16, 26)
-        night0 = rng.uniform(25, 45)
+        night0 = rng.uniform(40, 60)
     stand0, wear0 = rng.uniform(10, 18), rng.uniform(13.5, 15.5)
     start = end_day - timedelta(days=n_days - 1)
     rows = []

@@ -222,9 +222,65 @@ def test_night_needs_both_nights():
     one[-1] = replace(one[-1], night_restless_min=90.0)
     assert rule(care.score_resident("X", "X", one, END), care.NIGHT)["contribution"] == 0
     both = flat_days(night_restless_min=50.0)                         # +67% and +20 min each night
-    assert rule(care.score_resident("X", "X", both, END), care.NIGHT)["contribution"] == 25
-    double = flat_days(night_restless_min=61.0)
-    assert rule(care.score_resident("X", "X", double, END), care.NIGHT)["contribution"] == 45
+    assert rule(care.score_resident("X", "X", both, END), care.NIGHT)["contribution"] > 0
+
+
+# --- research 1.4: night rule is z >= +2.5 against the 14-day baseline AND at least +15% -------------
+def night_days(baseline: list[float], recent: tuple[float, float]) -> list[care.DayMetrics]:
+    """A 28-day record whose 14-day baseline nights are `baseline` and last two nights `recent`."""
+    days = flat_days()
+    _, window = care.windows(END)
+    by_day = dict(zip(window, baseline))
+    out = []
+    for d in days:
+        if d.day in by_day:
+            d = replace(d, night_restless_min=by_day[d.day])
+        elif d.day == END - timedelta(days=1):
+            d = replace(d, night_restless_min=recent[0])
+        elif d.day == END:
+            d = replace(d, night_restless_min=recent[1])
+        out.append(d)
+    return out
+
+
+BASE_40 = [36.0, 44.0] * 7          # mean 40 min, sample SD 4.15 min
+
+
+@pytest.mark.parametrize("recent,points", [
+    ((49.0, 49.0), 0),               # z +2.2, +22.5%, +9 min: under 2.5 SD
+    ((51.0, 51.0), 0),               # z +2.65, +27.5%, but +11 min: under the 15-minute minimum
+    ((55.5, 55.5), 25),              # z +3.7, +39%, +15.5 min: fires
+    ((57.0, 70.0), 45),              # z +4.1 and +7.2 on both nights: top band (Skubic: 2.5-4 SD)
+    ((55.5, 40.0), 0),               # only one night: needs 2 nights in a row
+])
+def test_night_rule_uses_z_against_the_rolling_baseline(recent, points):
+    r = rule(care.score_resident("X", "X", night_days(BASE_40, recent), END), care.NIGHT)
+    assert r["scored"] and r["contribution"] == points, r
+    assert r["baseline"] == 40 and r["baseline_sd"] == pytest.approx(4.2, abs=0.05)
+    assert len(r["z"]) == 2
+
+
+def test_night_rule_needs_at_least_15_percent_even_with_a_big_z():
+    """A very steady fortnight (SD floored at 5 min on a 100-minute usual): +13 min is z +2.6 but only +13%."""
+    steady = [98.0, 102.0] * 7
+    r = rule(care.score_resident("X", "X", night_days(steady, (113.0, 113.0)), END), care.NIGHT)
+    assert min(r["z"]) >= 2.5 and r["change_pct"] < 15 and r["contribution"] == 0, r
+
+
+def test_night_sd_has_a_floor_so_a_flat_baseline_cannot_explode_z():
+    flat = [40.0] * 14
+    r = rule(care.score_resident("X", "X", night_days(flat, (46.0, 46.0)), END), care.NIGHT)
+    assert r["baseline_sd"] == pytest.approx(2.0)                   # 5% of the usual, not 0
+    assert r["z"] == [3.0, 3.0] and r["contribution"] == 0          # +6 min: under 15 min anyway
+
+
+def test_night_threshold_is_labelled_with_its_sources():
+    assert care.NIGHT_Z == 2.5 and care.NIGHT_MIN_REL == 0.15 and care.NIGHT_MIN_CHANGE_MIN == 15.0
+    text = care.THRESHOLDS[care.NIGHT]
+    assert "z >= +2.5" in text and "+15%" in text and "15 min" in text and "2 nights in a row" in text
+    r = rule(care.score_resident("X", "X", night_days(BASE_40, (55.5, 55.5)), END), care.NIGHT)
+    assert "Skubic 2015" in r["source"] and "Leung 2023" in r["source"]
+    assert r["threshold_status"] == "untested assumption"
 
 
 def test_lower_values_never_score():
