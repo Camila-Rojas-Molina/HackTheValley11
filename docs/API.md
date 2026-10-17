@@ -31,7 +31,7 @@ tokens and timestamps shortened.
 | Wearer (`/me`) | `Authorization: Bearer <WEARER_KEY>` | `401 {"detail":"wrong wearer key"}` |
 | Contact | the capability token in the URL path; it cannot arm a session, see the session or ask for a location | `404`, `410` |
 | Operator | `X-Admin-Key: <ADMIN_KEY>` | `401 {"detail":"wrong X-Admin-Key"}`; `503` when `ADMIN_KEY` is unset |
-| Senior-mode reads (`/v1/care/*`) | none: every row is synthetic, enforced by a CHECK constraint | — |
+| Senior mode (`/v1/care/*`) | none: every row is synthetic, enforced by a CHECK constraint (feedback buttons included) | `404`, `422` |
 
 - **Database down:** every endpoint that needs the database answers `503 {"ok":false,"error":"database unavailable"}`.
 - **Canonical JSON:** device replies and the wearer's PIN and check-in replies are serialised with sorted keys
@@ -693,6 +693,25 @@ and with no key, the card keeps the rule template. Shortened card:
  "recent_window":{"from":"2026-10-15","to":"2026-10-16","hours":48},
  "baseline_window":{"from":"2026-10-03","to":"2026-10-04","hours":48,"note":"their own first 48 h in this 14-day record"},
  "data_quality":{"days_present":4,"days_expected":4,"wear_hours":55.3,"all_rules_scored":true}, "…": "…"}
+```
+
+### `POST /v1/care/alerts/{resident_id}/feedback`
+
+A button on a flagged card (`actions[]`): `useful`, `not_useful`, `already_known` (optional `reason`, at
+most 200 characters) or `snooze_3d`. Stored against the resident's latest card. `snooze_3d` mutes pushes
+for that resident for 3 days. Unknown resident: `404`; unknown action or a longer reason: `422`.
+
+```json
+{"ok":true,"synthetic":true,"resident_id":"R-08","action":"snooze_3d","as_of":"2026-10-16",
+ "snooze_until":"2026-10-20T10:59:41.120+00:00"}
+```
+
+### `GET /v1/care/feedback`
+
+How often each button was pressed, for tuning the rules on synthetic data.
+
+```json
+{"synthetic":true,"notice":"Hackathon prototype. …","counts":{"useful":2,"not_useful":1,"already_known":0,"snooze_3d":1}}
 ```
 
 ## 10. Health

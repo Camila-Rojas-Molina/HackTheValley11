@@ -183,3 +183,57 @@ async def test_a_resident_whose_data_stopped_stays_on_the_alert_list(client, db)
     alerts = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts")).json()["alerts"]}
     assert alerts["R-05"]["level"] == care.LEVEL_NO_DATA
     assert alerts["R-05"]["briefing_source"] == "template"
+
+
+# --- research 1.7: feedback buttons ---------------------------------------------------------------
+async def feedback_rows(db, resident_id):
+    async with db.connection() as conn:
+        return list(await (await conn.execute(
+            "SELECT * FROM care_feedback WHERE resident_id = %s ORDER BY id", (resident_id,))).fetchall())
+
+
+@pytest.mark.parametrize("action", ["useful", "not_useful", "already_known", "snooze_3d"])
+async def test_each_feedback_button_is_stored_against_the_latest_card(client, db, action):
+    await seed(client)
+    body = {"action": action}
+    if action == "already_known":
+        body["reason"] = "family mentioned it at visiting"
+    r = await client.post("/v1/care/alerts/R-08/feedback", json=body)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["ok"] is True and out["synthetic"] is True and out["action"] == action
+    assert out["as_of"] == END.isoformat()
+    rows = await feedback_rows(db, "R-08")
+    assert rows[-1]["action"] == action and rows[-1]["as_of"] == END and rows[-1]["synthetic"] is True
+    if action == "snooze_3d":
+        until = datetime.fromisoformat(out["snooze_until"])
+        assert timedelta(days=2, hours=23) < until - datetime.now(timezone.utc) <= timedelta(days=3)
+    else:
+        assert out["snooze_until"] is None
+    if action == "already_known":
+        assert rows[-1]["reason"] == "family mentioned it at visiting"
+
+
+async def test_feedback_rejects_unknown_residents_actions_and_long_reasons(client):
+    await seed(client)
+    assert (await client.post("/v1/care/alerts/R-99/feedback", json={"action": "useful"})).status_code == 404
+    assert (await client.post("/v1/care/alerts/R-08/feedback", json={"action": "delete"})).status_code == 422
+    r = await client.post("/v1/care/alerts/R-08/feedback", json={"action": "already_known", "reason": "x" * 201})
+    assert r.status_code == 422
+
+
+async def test_feedback_summary_counts_each_button(client, db):
+    await seed(client)
+    for action in ("useful", "useful", "not_useful"):
+        assert (await client.post("/v1/care/alerts/R-10/feedback", json={"action": action})).status_code == 200
+    summary = (await client.get("/v1/care/feedback")).json()
+    assert summary["synthetic"] is True
+    assert summary["counts"]["useful"] >= 2 and summary["counts"]["not_useful"] >= 1
+    assert set(summary["counts"]) == {"useful", "not_useful", "already_known", "snooze_3d"}
+
+
+async def test_feedback_touches_no_kaze_table(client, db):
+    await seed(client)
+    before = await kaze_counts(db)
+    await client.post("/v1/care/alerts/R-08/feedback", json={"action": "snooze_3d"})
+    assert await kaze_counts(db) == before

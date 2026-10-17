@@ -8,6 +8,10 @@ GET  /v1/care/alerts      latest alert cards at level "worth a look this shift" 
                           Each flagged card's briefing is worded by Vultr Serverless
                           Inference when VULTR_API_KEY is set (app/vultr.py); briefing_source says
                           which text is shown: "vultr", or "template" (care.local_briefing).
+POST /v1/care/alerts/{resident_id}/feedback   {action: useful | not_useful | already_known |
+                          snooze_3d, reason?}: a button on a flagged card, stored against the
+                          resident's latest card (research 1.7). snooze_3d mutes pushes for 3 days.
+GET  /v1/care/feedback    counts per button.
 POST /v1/demo/care-seed   X-Admin-Key. Body optional: {seed, end_day}. Replaces the synthetic cohort
                           (20 residents x 28 days, ending end_day, default yesterday UTC) and scores it.
 
@@ -24,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -33,6 +37,11 @@ from .. import care, vultr
 from ..security import same
 
 router = APIRouter(tags=["senior mode (synthetic)"])
+
+
+class FeedbackIn(BaseModel):
+    action: Literal["useful", "not_useful", "already_known", "snooze_3d"]
+    reason: Optional[str] = Field(default=None, max_length=200)
 
 
 class CareSeedIn(BaseModel):
@@ -80,6 +89,21 @@ async def word_briefings(cards: list[dict], **vultr_options) -> list[dict]:
             card["briefing"] = result["text"]
             card["briefing_source"] = "vultr"
     return cards
+
+
+@router.post("/v1/care/alerts/{resident_id}/feedback")
+async def care_feedback(request: Request, resident_id: str, body: FeedbackIn):
+    async with request.app.state.db.connection() as conn:
+        out = await care.record_feedback(conn, resident_id, body.action, body.reason)
+    if out is None:
+        raise HTTPException(404, "no synthetic resident with a card under that id")
+    return out
+
+
+@router.get("/v1/care/feedback")
+async def care_feedback_summary(request: Request):
+    async with request.app.state.db.connection() as conn:
+        return await care.feedback_summary(conn)
 
 
 @router.post("/v1/demo/care-seed")

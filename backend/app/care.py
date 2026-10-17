@@ -144,6 +144,17 @@ SCORE_LABEL = "change score (0-100)"
 SCORE_NOTE = ("How far today's patterns moved from this resident's own usual: the sum of the rule points. "
               "It ranks change only; the level comes from which rules fired, not from this number.")
 
+# Feedback buttons on every flagged card (research 1.7; Henry 2022 TREWS: confirm, dismiss or pause;
+# TigerPlace staff rated each alert). "Snooze" mutes pushes for this resident for 3 days.
+SNOOZE_DAYS = 3
+FEEDBACK_ACTIONS = (
+    {"id": "useful", "label": "Useful"},
+    {"id": "not_useful", "label": "Not useful"},
+    {"id": "already_known", "label": "Already known", "asks_reason": True},
+    {"id": "snooze_3d", "label": "Snooze 3 days"},
+)
+FEEDBACK_IDS = tuple(a["id"] for a in FEEDBACK_ACTIONS)
+
 EXPERIMENTAL_STATUS = "experimental, not scored"
 # Why each experimental signal is on the card but outside the score. Source: research 1.1,
 # Zhou 2017 (MOBILIZE Boston, PMC5462759); no study validates sway from a wrist or hair tie.
@@ -517,6 +528,8 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
             "all_rules_scored": all(r["status"] != "not enough data" for r in rules),
         },
         "record_context": context,
+        "actions": [dict(a) for a in FEEDBACK_ACTIONS] if level in FLAGGED else [],
+        "feedback_url": f"/v1/care/alerts/{resident_id}/feedback" if level in FLAGGED else None,
         "priority_raised_by": raised_by,
         "pattern_note": PATTERN_NOTE,
         "limits": ["Heart rate alone cannot show blood pressure.",
@@ -812,3 +825,31 @@ async def list_alerts(conn, include_low: bool = False) -> dict:
         else:
             out["as_of"] = latest["d"].isoformat()
     return out
+
+
+async def record_feedback(conn, resident_id: str, action: str, reason: Optional[str] = None) -> Optional[dict]:
+    """Store one button press against the resident's latest card. None if there is no such resident."""
+    if action not in FEEDBACK_IDS:
+        raise ValueError(action)
+    row = await (await conn.execute(
+        """SELECT r.id, (SELECT max(as_of) FROM care_alerts a WHERE a.resident_id = r.id) AS as_of
+             FROM care_residents r WHERE r.id = %s""", (resident_id,))).fetchone()
+    if row is None or row["as_of"] is None:
+        return None
+    saved = await (await conn.execute(
+        """INSERT INTO care_feedback (resident_id, as_of, action, reason, snooze_until)
+           VALUES (%s, %s, %s, %s, CASE WHEN %s THEN now() + make_interval(days => %s) END)
+           RETURNING as_of, action, snooze_until""",
+        (resident_id, row["as_of"], action, (reason or None) if action == "already_known" else None,
+         action == "snooze_3d", SNOOZE_DAYS))).fetchone()
+    return {"ok": True, "synthetic": True, "resident_id": resident_id, "action": saved["action"],
+            "as_of": saved["as_of"].isoformat(),
+            "snooze_until": saved["snooze_until"].isoformat() if saved["snooze_until"] else None}
+
+
+async def feedback_summary(conn) -> dict:
+    rows = await (await conn.execute(
+        "SELECT action, count(*) AS n FROM care_feedback GROUP BY action")).fetchall()
+    counts = {a: 0 for a in FEEDBACK_IDS}
+    counts.update({r["action"]: r["n"] for r in rows})
+    return {"synthetic": True, "notice": NOTICE, "counts": counts}

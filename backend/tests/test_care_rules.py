@@ -621,3 +621,16 @@ def test_template_and_prompt_call_it_a_change_score():
     card = scored()[7][1]
     assert f"(change score {card['score']}/100)" in vultr.template_briefing(card)
     assert "change score out of 100" in vultr.SYSTEM_PROMPT and "never call it a risk" in vultr.SYSTEM_PROMPT
+
+
+# --- research 1.7: Useful / Not useful / Already known / Snooze buttons on flagged cards --------------
+def test_flagged_cards_offer_the_four_feedback_buttons():
+    for _, card in scored():
+        if card["level"] in care.FLAGGED:
+            assert [a["id"] for a in card["actions"]] == ["useful", "not_useful", "already_known", "snooze_3d"]
+            assert [a["label"] for a in card["actions"]] == ["Useful", "Not useful", "Already known", "Snooze 3 days"]
+            assert next(a for a in card["actions"] if a["id"] == "already_known")["asks_reason"] is True
+            assert card["feedback_url"] == f"/v1/care/alerts/{card['resident_id']}/feedback"
+        else:
+            assert card["actions"] == [] and card["feedback_url"] is None
+    assert care.SNOOZE_DAYS == 3
