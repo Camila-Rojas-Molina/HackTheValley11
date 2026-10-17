@@ -94,6 +94,8 @@ def render(template: str, p: dict) -> str:
         return "This chat will get your StillHere reminders."
     if template == "invite_invalid":
         return "This invite link has expired or was already used."
+    if template == "private_chat_only":
+        return "Open this link in a private chat with the bot, not in a group."
     raise KeyError(template)
 
 
@@ -102,7 +104,7 @@ TEMPLATES = (
     "wearer_lost_contact", "wearer_restored", "alert_no_response", "alert_duress", "alert_final",
     "lost_contact", "restored", "late_device", "late_phone", "handling", "ack_thanks", "resolved",
     "false_alarm", "duress_pin_note", "contact_approved", "contact_pending", "wearer_linked",
-    "invite_invalid",
+    "invite_invalid", "private_chat_only",
 )
 
 # Contact-page wording per alert kind (no health data, no session internals).

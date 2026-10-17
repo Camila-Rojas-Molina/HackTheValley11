@@ -239,3 +239,25 @@ async def test_export_and_erase(client, db, ctx):
         tomb = await (await conn.execute(
             "SELECT kind FROM audit_log WHERE user_id = %s ORDER BY id", (w.user_id,))).fetchall()
     assert [t["kind"] for t in tomb] == ["timeline_erased"]
+
+
+async def test_telegram_start_from_a_group_chat_binds_nothing(client, db, ctx):
+    async with db.connection() as conn:
+        base = await telegram.get_offset(conn)
+    uid = iter(range(base + 1, base + 1000))
+    w = await make_world(client, db, contacts=0)
+    inv = (await client.post("/v1/contacts", json={}, headers=w.wearer)).json()
+    token = inv["web_link"].rsplit("/", 1)[1]
+    link = (await client.post("/v1/me/telegram-link", headers=w.wearer)).json()["start_token"]
+    for chat_type, text, chat_id in (("supergroup", f"/start@StillHereBot {token}", -1001234567890),
+                                     ("group", f"/start {link}", -100999)):
+        upd = {"update_id": next(uid), "message": {"message_id": 1, "chat": {"id": chat_id, "type": chat_type},
+                                                   "from": {"id": 7001, "first_name": "Sam"}, "text": text}}
+        await telegram.handle_update(db, ctx, upd)
+        said = [o for o in await outbox(db) if o["chat_id"] == chat_id]
+        assert [o["template"] for o in said] == ["private_chat_only"], said
+    async with db.connection() as conn:
+        c = await (await conn.execute("SELECT * FROM contacts WHERE id = %s", (inv["contact_id"],))).fetchone()
+        u = await (await conn.execute("SELECT * FROM users WHERE id = %s", (w.user_id,))).fetchone()
+    assert c["telegram_chat_id"] is None and c["invite_used_at"] is None  # the invite still works in private
+    assert u["telegram_chat_id"] is None and u["tg_link_token_hash"] is not None

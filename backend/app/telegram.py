@@ -87,6 +87,11 @@ async def _handle_message(conn, ctx: Ctx, update: dict) -> None:
     key = f"tg:{update['update_id']}"
     if not token:
         return
+    if (msg["chat"].get("type") or "private") != "private":
+        # A group would receive every alert, and its buttons would never match one person.
+        # The token is not used, so it still works in a private chat with the bot.
+        await _say(conn, chat_id, "private_chat_only", {}, key)
+        return
     th = sha256_hex(token)
     contact = await (await conn.execute(
         """SELECT c.id, c.user_id, c.name, c.web_token_nonce, u.display_name AS wearer
