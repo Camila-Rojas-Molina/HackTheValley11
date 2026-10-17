@@ -652,7 +652,9 @@ Auth: the device key plus `X-Device-Id`, or the wearer key. Stored with one `COP
 - `dropped` counts rows that land outside server time − 47 h … + 60 s (an hour inside the 48 h `night_out`
   window, so every accepted row can still be refreshed into the rollups).
 - A backlog (rows older than the 1-minute refresh policies' 2-hour window) is refreshed into the 1 min, 1 h
-  and 1 d rollups by the batch call itself on TimescaleDB, so every accepted row reaches them.
+  and 1 d rollups by the batch call itself on TimescaleDB, so every accepted row reaches them. The batch is
+  committed first: if that refresh fails it is logged, the reply still reports the rows as stored, and
+  `POST /v1/telemetry/refresh` can redo it.
 - A malformed row is `422`, for example `{"detail":"row 0: expected [t, ax_mg, ay_mg, az_mg, fsr_a_mv?, fsr_b_mv?]"}`.
 - 3000 rows (60 s at 50 Hz): median 28 ms per HTTP round trip over 5 runs, against a local TimescaleDB
   2.30.2 / PostgreSQL 18.6 container.

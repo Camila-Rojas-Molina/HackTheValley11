@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence
 
+import psycopg
+
 log = logging.getLogger("stillhere.timeseries")
 
 PROFILES = ("night_out", "care")
@@ -354,8 +356,13 @@ async def refresh_backlog(conn, rows: Sequence[tuple]) -> list[str]:
         hi = min(_floor(newest, step) + step, now - step)
         if hi - lo < step:
             continue  # recent enough for the real-time part of the query (or no complete bucket)
-        await conn.execute("CALL refresh_continuous_aggregate(%s::regclass, %s::timestamptz, %s::timestamptz)",
-                           (view, lo, hi))
+        try:
+            await conn.execute("CALL refresh_continuous_aggregate(%s::regclass, %s::timestamptz, %s::timestamptz)",
+                               (view, lo, hi))
+        except psycopg.Error as exc:
+            # The batch is already stored: report it as stored; POST /v1/telemetry/refresh can redo this.
+            log.warning("backlog refresh failed at %s (%s); the batch is stored", view, type(exc).__name__)
+            break
         done.append(view)
     return done
 

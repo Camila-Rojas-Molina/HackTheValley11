@@ -620,3 +620,33 @@ async def test_gaps_with_no_data_is_one_range_and_contacts_cannot_read_it(client
     contact = {"Authorization": f"Bearer {w.contacts[0]['token']}"}
     assert (await client.get("/v1/telemetry/gaps", headers=contact)).status_code == 401
     assert (await client.get("/v1/telemetry/gaps?hours=200", headers=w.wearer)).status_code == 422
+
+
+async def test_a_failed_backlog_refresh_never_fails_the_stored_batch(caplog):
+    """The batch is committed before its backlog is refreshed: a refresh error is logged, not raised."""
+    import psycopg
+
+    now = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
+
+    class Result:
+        def __init__(self, row):
+            self.row = row
+
+        async def fetchone(self):
+            return self.row
+
+    class Conn:
+        calls = 0
+
+        async def execute(self, sql, args=None):
+            if sql.startswith("CALL"):
+                Conn.calls += 1
+                raise psycopg.errors.LockNotAvailable("simulated")
+            if "timeseries_setup" in sql:
+                return Result({"mode": "timescaledb", "zscore_method": None, "gaps_method": None, "note": None})
+            return Result({"now": now})
+
+    rows = [(now - timedelta(hours=5), "u", None, "night_out", False, 0, 0, 1000, None, None)]
+    with caplog.at_level("WARNING"):
+        assert await timeseries.refresh_backlog(Conn(), rows) == []
+    assert Conn.calls == 1 and "backlog refresh failed" in caplog.text
