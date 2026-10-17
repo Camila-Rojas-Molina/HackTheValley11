@@ -1,0 +1,82 @@
+# StillHere: backend + TimescaleDB + a one-shot migrate step (+ Caddy HTTPS on a Vultr VM).
+#
+# Local, everything bundled (no keys needed):
+#   docker compose up --build                       -> http://127.0.0.1:8000/v1/health
+#
+# Vultr Compute VM, bundled database, HTTPS through Caddy (PUBLIC_HOSTNAME in backend/.env):
+#   docker compose --env-file backend/.env --profile vultr up -d --build
+#
+# Vultr Compute VM with Tiger Cloud (DATABASE_URL in backend/.env): skip the local database.
+#   docker compose --env-file backend/.env run --rm --no-deps migrate
+#   docker compose --env-file backend/.env --profile vultr up -d --build --no-deps api caddy
+#
+# backend/.env (optional) feeds the app's settings: Telegram, ADMIN_KEY, DEVICE_KEY,
+# WEARER_KEY, PINs, VULTR_API_KEY, PUBLIC_BASE_URL. DATABASE_URL inside the containers is
+# the bundled database unless DATABASE_URL is set for compose itself (--env-file or the
+# shell). Never commit backend/.env.
+
+x-backend: &backend
+  build: .
+  env_file:
+    - path: ./backend/.env
+      required: false
+  environment:
+    DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-stillhere-local}@db:5432/stillhere}
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stillhere-local}
+      POSTGRES_DB: stillhere
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d stillhere"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    # No published port: reach it with `docker compose exec db psql -U postgres stillhere`.
+
+  migrate:
+    <<: *backend
+    command: ["python", "scripts/migrate.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *backend
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Loopback only by default: on a VM, Docker-published ports bypass ufw, so the public
+    # way in is Caddy (profile vultr). API_BIND=0.0.0.0 exposes it on the LAN.
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    profiles: ["vultr"]
+    # Automatic HTTPS for PUBLIC_HOSTNAME (e.g. stillhere.203-0-113-7.nip.io for a VM at 203.0.113.7).
+    command: ["caddy", "reverse-proxy", "--from", "${PUBLIC_HOSTNAME:-localhost}", "--to", "api:8000"]
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
