@@ -261,3 +261,66 @@ async def test_telegram_start_from_a_group_chat_binds_nothing(client, db, ctx):
         u = await (await conn.execute("SELECT * FROM users WHERE id = %s", (w.user_id,))).fetchone()
     assert c["telegram_chat_id"] is None and c["invite_used_at"] is None  # the invite still works in private
     assert u["telegram_chat_id"] is None and u["tg_link_token_hash"] is not None
+
+
+async def test_outbox_never_gives_up_on_a_network_outage(client, db, ctx):
+    from app import outbox as ob
+    w = await make_world(client, db, contacts=1)
+    c1 = w.contacts[0]
+    async with db.connection() as conn:
+        await conn.execute("UPDATE contacts SET telegram_chat_id = 5552 WHERE id = %s", (c1["id"],))
+    await to_state(client, db, ctx, w, "ESCALATED_L1")
+    await _only_pending(db, c1["id"])
+    up = {"on": True}
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if not up["on"]:
+            raise httpx.ConnectError("network unreachable")
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": len(calls)}})
+
+    async def cycle(sender):
+        async with db.connection() as conn:
+            await conn.execute("UPDATE outbox SET next_attempt_at = now() WHERE contact_id = %s AND status = 'pending'",
+                               (c1["id"],))
+        sender._last_by_chat.clear()
+        await sender.run_once()
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        sender = Sender(db, ctx, TelegramAPI("123:TEST", http))
+        await cycle(sender)  # the alert reaches the contact
+        up["on"] = False  # then the laptop loses its route to Telegram...
+        await client.post(f"/v1/sessions/{w.session_id}/cancel", json={"pin": "2468"}, headers=w.wearer)
+        for _ in range(3 * ob.MAX_ATTEMPTS):  # ...for far longer than the attempt cap
+            await cycle(sender)
+        fa = [r for r in await outbox(db, w.session_id, contact_id=c1["id"]) if r["template"] == "false_alarm"][0]
+        assert fa["status"] == "pending" and fa["attempts"] >= 3 * ob.MAX_ATTEMPTS
+        assert fa["last_error"].startswith("0: ConnectError")
+        up["on"] = True
+        await cycle(sender)
+    rows = await outbox(db, w.session_id, contact_id=c1["id"])
+    assert {(r["template"], r["status"], r["channel"]) for r in rows} == {
+        ("alert_no_response", "sent", "telegram"), ("false_alarm", "sent", "telegram")}
+
+
+async def test_outbox_stops_retrying_a_permanent_rejection(client, db, ctx):
+    from app import outbox as ob
+    async with db.connection() as conn:
+        row = await (await conn.execute(
+            """INSERT INTO outbox (dedupe_key, recipient, chat_id, purpose, text)
+               VALUES ('permanent-403', 'chat', 5553, 'x', 'x') RETURNING id""")).fetchone()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"ok": False, "error_code": 403, "description": "Forbidden: bot was blocked"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        sender = Sender(db, ctx, TelegramAPI("123:TEST", http))
+        for _ in range(ob.MAX_ATTEMPTS + 2):
+            async with db.connection() as conn:
+                await conn.execute("UPDATE outbox SET next_attempt_at = now() WHERE id = %s", (row["id"],))
+            sender._last_by_chat.clear()
+            await sender.run_once()
+    async with db.connection() as conn:
+        r = await (await conn.execute("SELECT status, attempts FROM outbox WHERE id = %s", (row["id"],))).fetchone()
+    assert r["status"] == "failed" and r["attempts"] == ob.MAX_ATTEMPTS

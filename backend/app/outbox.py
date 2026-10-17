@@ -2,7 +2,8 @@
 
 Rows are claimed with UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)
 and a 30 s lease (locked_until); a reaper returns stale 'sending' rows to
-'pending'. A crash between the provider accepting a message and the row being
+'pending'. Network errors, timeouts and 5xx are retried until the outage ends
+(backoff capped at 60 s); only a permanent 4xx rejection ends as 'failed'. A crash between the provider accepting a message and the row being
 marked 'sent' can therefore send it twice: a deliberate safety trade-off.
 
 Channels:
@@ -93,17 +94,19 @@ async def mark_sent(db, row: dict, channel: str, provider_id: Optional[str]) -> 
                     (float(row["prompt_window_s"]), row["timer_id"]))
 
 
-async def release(db, row: dict, delay_s: float, error: Optional[str] = None, count_attempt: bool = True) -> None:
-    """Back to pending, retried no earlier than now + delay_s (or failed after MAX_ATTEMPTS)."""
+async def release(db, row: dict, delay_s: float, error: Optional[str] = None, count_attempt: bool = True,
+                  may_fail: bool = True) -> None:
+    """Back to pending, retried no earlier than now + delay_s. Only a permanent rejection
+    (may_fail) ends as 'failed' after MAX_ATTEMPTS: an outage is retried for as long as it lasts."""
     async with db.connection() as conn:
         await conn.execute(
             """UPDATE outbox
-                  SET status = CASE WHEN %s AND attempts >= %s THEN 'failed' ELSE 'pending' END,
+                  SET status = CASE WHEN %s AND %s AND attempts >= %s THEN 'failed' ELSE 'pending' END,
                       attempts = CASE WHEN %s THEN attempts ELSE greatest(attempts - 1, 0) END,
                       next_attempt_at = now() + make_interval(secs => %s),
                       locked_until = NULL, last_error = coalesce(left(%s, 500), last_error)
                 WHERE id = %s AND status = 'sending'""",
-            (count_attempt, MAX_ATTEMPTS, count_attempt, float(delay_s), error, row["id"]))
+            (may_fail, count_attempt, MAX_ATTEMPTS, count_attempt, float(delay_s), error, row["id"]))
 
 
 async def _chat_id(db, row: dict) -> tuple[Optional[int], str]:
@@ -153,7 +156,7 @@ class Sender:
             mid = (res.get("result") or {}).get("message_id") if isinstance(res.get("result"), dict) else None
             await mark_sent(self.db, row, "telegram", str(mid) if mid is not None else None)
             return "telegram"
-        status = res.get("status") or res.get("error_code")
+        status = res.get("status") if res.get("status") is not None else res.get("error_code")
         desc = str(res.get("description", ""))
         if status == 429:
             retry_after = float((res.get("parameters") or {}).get("retry_after") or 1)
@@ -168,7 +171,10 @@ class Sender:
             await release(self.db, row, 0, desc, count_attempt=False)
             return "edit_fallback"
         backoff = min(60.0, 2.0 ** max(1, row["attempts"]))
-        await release(self.db, row, backoff, f"{status}: {desc}")
+        # No answer, a timeout or a server error is an outage: retry (backoff capped at 60 s) until
+        # it ends. Only a client error (bad request, bot blocked) can use up MAX_ATTEMPTS.
+        permanent = bool(status) and 400 <= int(status) < 500 and int(status) != 408
+        await release(self.db, row, backoff, f"{status}: {desc}", may_fail=permanent)
         return "retry"
 
     async def run_once(self) -> int:
@@ -180,7 +186,7 @@ class Sender:
             except Exception as exc:
                 log.exception("outbox row %s failed", row["id"])
                 msg = self.api.scrub(repr(exc)) if self.api else repr(exc)
-                await release(self.db, row, min(60.0, 2.0 ** max(1, row["attempts"])), msg)
+                await release(self.db, row, min(60.0, 2.0 ** max(1, row["attempts"])), msg, may_fail=False)
         return len(rows)
 
 
