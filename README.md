@@ -134,6 +134,10 @@ applies them from the file and the fixtures a test uses):
 | `chaos` | `kill -9` mid-REMINDED, the database cut under a running server, the bridge holding events across a restart |
 | `tsdb`, `tsdb-db` | start `timescale/timescaledb:latest-pg16` as `stillhere-tsdb-matrix` on `127.0.0.1:55435`, run the migration and time-series tests, then the `db` suite against it, and remove the container. SKIP without Docker (`SKIP_DOCKER=1` skips them on purpose) |
 
+- CI (`.github/workflows/ci.yml`, GitHub Actions) runs the unit, property, contract and plain-PostgreSQL
+  integration tests and the TimescaleDB migration test on every push to `main` and every pull request, with
+  `postgres:16` and `timescale/timescaledb:latest-pg16` service containers and no secrets. The live-server,
+  browser, chaos and Docker suites run locally with `scripts/test_all.sh`.
 - Unit tests need nothing.
 - Integration tests start a private Postgres with pgserver in `../.pgdata-stillhere`, next to the repo.
   Set `STILLHERE_PGDATA=/path` for another data directory, or `STILLHERE_TEST_PG_URI=postgresql://...` for
