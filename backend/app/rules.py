@@ -33,11 +33,32 @@ REASON_LABELS = {
     REASON_OFFBODY: "scrunchie off → early check-in",
 }
 
+# Night-out thresholds (research 1.11). Every one is an untested engineering assumption: there is no
+# peer-reviewed data on heart rate or wrist/hair movement while dancing to tune them against, so no
+# source number is quoted for them. They only decide when to ask sooner (PULL_FORWARD).
 HR_ABS_DELTA_BPM = 30.0  # assumption
 HR_REL_DELTA = 0.35  # assumption
 STILL_ENMO_MG = 45.0  # assumption: "still" below this 60 s mean ENMO
 VIGOROUS_ENMO_MG = 100.0  # assumption: suppress after this (e.g. dancing)
-VIGOROUS_SUPPRESS = timedelta(minutes=10)
+VIGOROUS_SUPPRESS = timedelta(minutes=10)  # assumption
+
+_NO_SOURCE = "no peer-reviewed data to tune it against"
+THRESHOLD_NOTES = {
+    "HR_ABS_DELTA_BPM": f"untested engineering assumption; {_NO_SOURCE} (no dancing heart-rate data)",
+    "HR_REL_DELTA": f"untested engineering assumption; {_NO_SOURCE} (no dancing heart-rate data)",
+    "STILL_ENMO_MG": f"untested engineering assumption; {_NO_SOURCE} for a wrist or hair-tie sensor",
+    "VIGOROUS_ENMO_MG": f"untested engineering assumption; {_NO_SOURCE} (no dancing movement data)",
+    "VIGOROUS_SUPPRESS": f"untested engineering assumption; {_NO_SOURCE} (no dancing movement data)",
+}
+
+
+def threshold_table() -> dict:
+    """For GET /v1/health: the values and their status, so no one reads them as validated."""
+    return {"status": "untested engineering assumptions",
+            "values": {"HR_ABS_DELTA_BPM": HR_ABS_DELTA_BPM, "HR_REL_DELTA": HR_REL_DELTA,
+                       "STILL_ENMO_MG": STILL_ENMO_MG, "VIGOROUS_ENMO_MG": VIGOROUS_ENMO_MG,
+                       "VIGOROUS_SUPPRESS_S": VIGOROUS_SUPPRESS.total_seconds()},
+            "notes": dict(THRESHOLD_NOTES)}
 
 
 @dataclass(frozen=True)

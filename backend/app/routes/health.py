@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from .. import rules
 from ..deps import get_db
 from ..security import same
 
@@ -22,6 +23,7 @@ async def health(request: Request):
         "telegram": "configured" if ctx.settings.telegram_enabled else "off (log channel)",
         "default_profile": ctx.settings.default_profile,
         "emergency_services": "SIMULATED (never placed)",
+        "rule_thresholds": rules.threshold_table(),
     }
     operator = bool(ctx.settings.admin_key) and same(request.headers.get("x-admin-key"), ctx.settings.admin_key)
     try:

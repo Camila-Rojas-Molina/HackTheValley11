@@ -738,8 +738,15 @@ No auth. `200` when the database answers, `503` with `"db":"down"` otherwise. Th
 
 ```json
 {"ok": true, "db": "up", "server_time": "2026-10-17T07:33:53.026210+00:00", "telegram": "off (log channel)",
- "default_profile": "demo", "emergency_services": "SIMULATED (never placed)"}
+ "default_profile": "demo", "emergency_services": "SIMULATED (never placed)",
+ "rule_thresholds": {"status": "untested engineering assumptions",
+  "values": {"HR_ABS_DELTA_BPM": 30.0, "HR_REL_DELTA": 0.35, "STILL_ENMO_MG": 45.0, "VIGOROUS_ENMO_MG": 100.0,
+             "VIGOROUS_SUPPRESS_S": 600.0},
+  "notes": {"HR_ABS_DELTA_BPM": "untested engineering assumption; no peer-reviewed data to tune it against (no dancing heart-rate data)", "…": "…"}}}
 ```
+
+`rule_thresholds` lists the night-out sensor and heart-rate thresholds. None has a published source to tune
+it against; they only decide when to ask sooner.
 
 With a valid `X-Admin-Key` it also returns `pending_timers` and `pending_outbox`. They are not public: a duress
 PIN adds escalation timers and contact messages, so public counts would tell it apart from the real PIN.

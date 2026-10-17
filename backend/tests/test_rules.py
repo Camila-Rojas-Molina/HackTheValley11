@@ -68,3 +68,38 @@ def test_cooldown():
     assert rules.cooldown_ok(now=NOW, last_at=None, cooldown_s=900)
     assert not rules.cooldown_ok(now=NOW, last_at=NOW - timedelta(minutes=5), cooldown_s=900)
     assert rules.cooldown_ok(now=NOW, last_at=NOW - timedelta(minutes=16), cooldown_s=900)
+
+
+# --- research 1.11: every night-out threshold is a labelled assumption with no quoted source --------
+def test_every_threshold_constant_is_labelled_an_untested_assumption():
+    import ast
+    from pathlib import Path
+    src = Path(rules.__file__).read_text(encoding="utf-8")
+    numeric = []
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if name.isupper() and not isinstance(getattr(rules, name), (str, tuple, dict)):
+                numeric.append(name)
+    assert set(numeric) == {"HR_ABS_DELTA_BPM", "HR_REL_DELTA", "STILL_ENMO_MG", "VIGOROUS_ENMO_MG",
+                            "VIGOROUS_SUPPRESS"}
+    assert set(rules.THRESHOLD_NOTES) == set(numeric)
+    for name in numeric:
+        note = rules.THRESHOLD_NOTES[name]
+        assert note.startswith("untested engineering assumption"), name
+        assert "no peer-reviewed" in note, name
+        line = next(l for l in src.splitlines() if l.startswith(f"{name} ="))
+        assert "assumption" in line, line
+
+
+def test_threshold_notes_say_there_is_no_dancing_data_to_tune_against():
+    for name in ("HR_ABS_DELTA_BPM", "HR_REL_DELTA", "VIGOROUS_ENMO_MG", "VIGOROUS_SUPPRESS"):
+        assert "dancing" in rules.THRESHOLD_NOTES[name]
+
+
+async def test_health_lists_the_rule_thresholds_as_assumptions(client):
+    body = (await client.get("/v1/health")).json()
+    t = body["rule_thresholds"]
+    assert t["status"] == "untested engineering assumptions"
+    assert t["values"]["HR_ABS_DELTA_BPM"] == 30.0 and t["values"]["VIGOROUS_SUPPRESS_S"] == 600.0
+    assert set(t["notes"]) == set(rules.THRESHOLD_NOTES)
