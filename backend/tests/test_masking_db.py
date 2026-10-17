@@ -368,3 +368,21 @@ async def test_operator_entries_stay_hidden_while_a_masked_alert_is_open(client,
             """SELECT kind, masked, alert_id FROM audit_log WHERE session_id = %s
                 AND kind IN ('demo_fast_forward', 'profile_set')""", (sid,))).fetchall()
     assert len(rows) == 2 and all(r["masked"] and r["alert_id"] is not None for r in rows)
+
+
+async def test_public_health_does_not_change_with_a_duress_pin(client, db, ctx):
+    from tests.conftest import ADMIN_KEY
+    w = await make_world(client, db)
+
+    def public(r):
+        assert r.status_code == 200
+        return {k: v for k, v in r.json().items() if k != "server_time"}
+    before = public(await client.get("/v1/health"))
+    await client.post(f"/v1/sessions/{w.session_id}/cancel", json={"pin": DURESS_PIN}, headers=w.wearer)
+    assert (await session_row(db, w.session_id))["state"] == "ESCALATED_L1"
+    assert public(await client.get("/v1/health")) == before
+    assert "pending_timers" not in before and "pending_outbox" not in before
+    # The operator still gets the queue sizes.
+    op = (await client.get("/v1/health", headers={"X-Admin-Key": ADMIN_KEY})).json()
+    assert isinstance(op["pending_timers"], int) and isinstance(op["pending_outbox"], int)
+    assert "pending_timers" not in (await client.get("/v1/health", headers={"X-Admin-Key": "wrong"})).json()

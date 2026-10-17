@@ -691,10 +691,12 @@ and with no key, the card keeps the rule template. Shortened card:
 No auth. `200` when the database answers, `503` with `"db":"down"` otherwise. The Docker healthcheck uses it.
 
 ```json
-{"ok": true, "db": "up", "server_time": "2026-10-17T07:33:53.026210+00:00", "pending_timers": 0,
- "pending_outbox": 0, "telegram": "off (log channel)", "default_profile": "demo",
- "emergency_services": "SIMULATED (never placed)"}
+{"ok": true, "db": "up", "server_time": "2026-10-17T07:33:53.026210+00:00", "telegram": "off (log channel)",
+ "default_profile": "demo", "emergency_services": "SIMULATED (never placed)"}
 ```
+
+With a valid `X-Admin-Key` it also returns `pending_timers` and `pending_outbox`. They are not public: a duress
+PIN adds escalation timers and contact messages, so public counts would tell it apart from the real PIN.
 
 ## 11. Outbound services
 
