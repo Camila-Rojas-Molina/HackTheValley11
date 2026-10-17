@@ -312,10 +312,10 @@ Notes:
 
 | Item | Status | Assumption or what still needs validation |
 |---|---|---|
-| Durable countdown: L1 → L2, ACKED follow-up, `kill -9` resume | **Demonstrated** (`test_chaos_kill9.py`, `chaos.sh`) | At-least-once delivery means possible duplicates. Tested with one worker. |
+| Durable countdown: L1 → L2, ACKED follow-up, `kill -9` resume | **Demonstrated** (`test_chaos_kill9.py`, `chaos.sh`) | At-least-once delivery: a crash between Telegram accepting a message and the row being marked sent sends it once more (tested); a mark that keeps failing does not re-send. Tested with one worker. |
 | ESCALATED_FINAL ("would contact 911 / campus safety") | **Simulated, never placed** | A real escalation partner and protocol |
 | Telegram nudges, alerts and buttons; contact web page | **Demonstrated** once a bot token is set; log channel without one | Contacts must have started the bot. Bot chats are not end-to-end encrypted, so alert text carries no health data. |
-| Wearer approves contacts; single-use 10-min invites; silent removal | **Demonstrated** | Coercive-control scenarios need expert review |
+| Wearer approves contacts; single-use 10-min invites (web and Telegram, both tested); silent removal | **Demonstrated** | Coercive-control scenarios need expert review |
 | Squeeze OK / duress / counted challenge | **Demonstrated** over the line protocol (`bridge.py --stdin`, `simulate.py`) | On the real squeeze sensor it depends on the firmware; learnability is untested |
 | Lost contact, distinct from no response | **Demonstrated** (unplug; heartbeats stop) | Lease length and grace period in real use |
 | Live heart rate from the wearer's Apple Watch (HeartCast → `/hr-bridge` → `/v1/hr`) | **Demonstrated** (data path) | About 5 s updates; the iPhone relay must stay connected |

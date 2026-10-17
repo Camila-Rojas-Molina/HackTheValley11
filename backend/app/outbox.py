@@ -6,7 +6,9 @@ unsent row to the same recipient); a reaper returns stale 'sending' rows to
 'pending', and a starting sender at once returns rows an earlier (killed)
 sender had claimed (claimed_by). Network errors, timeouts and 5xx are retried until the outage ends
 (backoff capped at 60 s); only a permanent 4xx rejection ends as 'failed'. A crash between the provider accepting a message and the row being
-marked 'sent' can therefore send it twice: a deliberate safety trade-off.
+marked 'sent' can therefore send it twice: a deliberate safety trade-off. Within one sender process a mark
+that fails is retried without sending again (Sender._accepted), so a failing mark never re-sends; only a
+restart in that window can, once.
 
 Channels:
   telegram  bot token set and the recipient has a chat id
@@ -170,10 +172,22 @@ class Sender:
         self.ctx = ctx
         self.api = api
         self._last_by_chat: dict[int, float] = {}
+        # Rows the provider accepted whose mark as 'sent' failed: retried as a mark only, never re-sent.
+        self._accepted: dict[int, tuple[str, Optional[str]]] = {}
         self.token = uuid.uuid4().hex  # this sender's claims
         self._started = False
 
+    async def _mark(self, row: dict, channel: str, provider_id: Optional[str]) -> None:
+        self._accepted[row["id"]] = (channel, provider_id)
+        await mark_sent(self.db, row, channel, provider_id)
+        self._accepted.pop(row["id"], None)
+
     async def deliver(self, row: dict) -> str:
+        if row["id"] in self._accepted:
+            # Already accepted by the provider; only marking it failed. Mark it, do not send it again.
+            channel, provider_id = self._accepted[row["id"]]
+            await self._mark(row, channel, provider_id)
+            return channel
         chat_id, fallback = await _chat_id(self.db, row)
         if fallback == REMOVED:
             await drop(self.db, row, "contact removed")
@@ -182,7 +196,7 @@ class Sender:
             channel = fallback
             if channel == "log":
                 log.info("[outbox:log] %s %s: %s", row["recipient"], row.get("contact_id") or "", row["text"])
-            await mark_sent(self.db, row, channel, f"{channel}:{row['id']}")
+            await self._mark(row, channel, f"{channel}:{row['id']}")
             return channel
         wait = PER_CHAT_MIN_INTERVAL_S - (time.monotonic() - self._last_by_chat.get(chat_id, -1e9))
         if wait > 0:
@@ -200,7 +214,7 @@ class Sender:
         res = await self.api.call(method, payload)
         if res.get("ok"):
             mid = (res.get("result") or {}).get("message_id") if isinstance(res.get("result"), dict) else None
-            await mark_sent(self.db, row, "telegram", str(mid) if mid is not None else None)
+            await self._mark(row, "telegram", str(mid) if mid is not None else None)
             return "telegram"
         status = res.get("status") if res.get("status") is not None else res.get("error_code")
         desc = str(res.get("description", ""))
