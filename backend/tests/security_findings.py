@@ -1,15 +1,15 @@
 """Every finding of the two adversarial review rounds (r1, r2) and the regression tests that pin its fix.
 
 Keys are "r1#N" / "r2#N"; values name the fix commit and the tests ("file::test_function"). Round 2 fixed
-findings in themed commits, so findings fixed together share that commit's tests. r1 #27 and #28 are not
-referenced by any commit and have no entry (see UNREFERENCED).
+findings in themed commits, so findings fixed together share that commit's tests. r1 #27 and #28 needed
+TimescaleDB, were carried into round 2 as r2 #34 and #35, and share their entries.
 
 tests/test_security_regressions.py checks that every finding has an entry and that every listed test
 exists; tests/conftest.py marks the listed tests `security`, so `pytest -m security` runs exactly them.
 """
 from __future__ import annotations
 
-UNREFERENCED = ("r1#27", "r1#28")
+UNREFERENCED: tuple[str, ...] = ()
 
 _TWIN = ("f4f03e4", [
     "test_masking_twin_db.py::test_a_duress_squeeze_during_an_escalation_never_shows_duress_to_the_wearer",
@@ -154,6 +154,8 @@ for _n in (29, 31, 32, 33):
     FINDINGS[f"r2#{_n}"] = _CARE
 FINDINGS["r2#35"] = ("8906784", ["test_timeseries.py::test_a_failed_backlog_refresh_never_fails_the_stored_batch",
                                  "test_timeseries_tsdb.py::test_a_backlog_older_than_the_refresh_window_reaches_every_rollup"])
+FINDINGS["r1#27"] = FINDINGS["r2#34"]
+FINDINGS["r1#28"] = FINDINGS["r2#35"]
 
 
 def all_tests() -> set[str]:
