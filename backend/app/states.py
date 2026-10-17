@@ -532,7 +532,8 @@ def _on_wearer_ok(snap: Snapshot, d: Decision) -> None:
 
 
 def _false_alarm_entry(snap: Snapshot, to_public: str) -> AuditEntry:
-    return AuditEntry("false_alarm", {"by": "wearer_pin"}, masked=False,
+    # "through" is part of the entry itself, so the duress cover entry carries it too.
+    return AuditEntry("false_alarm", {"by": "wearer_pin", "through": FALSE_ALARM}, masked=False,
                       from_state=snap.public_state, to_state=to_public)
 
 
