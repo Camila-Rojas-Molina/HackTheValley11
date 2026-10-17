@@ -62,6 +62,7 @@ def sample_events():
     for kind in (states.CONTACT_ACK, states.CONTACT_PASS, states.CONTACT_SAFE, states.CONTACT_CANT_REACH):
         for c in (C1, C2, 999):
             evs.append(Event(kind, contact_id=c))
+            evs.append(Event(kind, contact_id=c, twin=True))  # on the twin's alert (masked duress)
     for reason in ("hr_different_from_usual", "hr_signal_lost", "head_position_change", "fall_like_motion", "offbody"):
         evs.append(Event(states.PULL_FORWARD, reason=reason, level="MED"))
     return evs
@@ -211,9 +212,27 @@ def test_duress_opens_masked_alert_at_l1(s):
         assert d.to_state == "ESCALATED_L1"
         assert d.public_state == ARMED
         assert d.alert_masked_after and d.alert_kind_after == DURESS
-        assert [n.template for n in d.notify if n.to == "contact"] == ["alert_duress"]
+        assert [n.template for n in d.notify if n.to == "contact" and not n.silent] == ["alert_duress"]
         assert any(t.kind == states.ACK_TIMEOUT and t.delay_s == T.duress_ack_s for t in d.timers)
         assert all(e.masked for e in d.audit if e.kind in ("duress", "escalated"))
+
+
+@pytest.mark.parametrize("st", [level_state(1), ACKED, FINAL])
+def test_a_duress_squeeze_during_an_alert_masks_it_and_the_twin_keeps_the_alert_she_saw(st):
+    a = alert(level=1, status="ACKED" if st == ACKED else "OPEN", acked_by=C1 if st == ACKED else None,
+              is_final=st == FINAL)
+    s = snap(st, alert=a)
+    d = decide(s, Event(states.SQUEEZE, pattern="duress", k=2), first)
+    assert [(op.op, op.kind, op.masked) for op in d.alert_ops] == [("upgrade", DURESS, True)]
+    assert d.fork and d.alert_masked_after and d.public_state == st and d.to_state == st
+    assert not d.cover_alert_ops  # the twin (a late plain squeeze) leaves the alert she saw open
+    # A real PIN afterwards: the escalation goes on, the twin's alert closes as a false alarm.
+    s2 = step(s, d)
+    assert s2.cover_alert is not None and s2.cover_alert.kind == NO_RESPONSE and not s2.cover_alert.masked
+    d2 = decide(s2, Event(states.PIN_REAL), first)
+    assert d2.to_state == st and d2.public_state == ARMED and d2.reply == "cancelled"
+    assert [(op.op, op.status) for op in d2.cover_alert_ops] == [("close", states.FALSE_ALARM)]
+    assert states.device_cmd(d2.public_state, d2.challenge_n, None, d2.prompt_cause)["led"] == "off"
 
 
 def test_real_pin_never_closes_duress_alert():
@@ -283,10 +302,9 @@ def test_no_contacts_goes_straight_to_simulated_final():
 
 
 # --- randomized walk ------------------------------------------------------------
-def step(s: Snapshot, d) -> Snapshot:
-    a = s.alert
+def _fold_alert(a, ops, notify, twin: bool):
     recipients = list(a.recipients) if a else []
-    for op in d.alert_ops:
+    for op in ops:
         if op.op == "open":
             a, recipients = AlertView(kind=op.kind, level=op.level or 1, masked=bool(op.masked)), []
         elif op.op == "level":
@@ -300,13 +318,23 @@ def step(s: Snapshot, d) -> Snapshot:
         elif op.op == "renotify":
             a = replace(a, renotify_count=a.renotify_count + 1)
     if a is not None:
-        for n in d.notify:
-            if n.to == "contact" and n.contact_id not in recipients:
+        for n in notify:
+            if n.to == "contact" and n.twin == twin and n.contact_id not in recipients:
                 recipients.append(n.contact_id)
         a = replace(a, recipients=tuple(recipients))
+    return a
+
+
+def step(s: Snapshot, d) -> Snapshot:
+    """Fold a decision back into a snapshot, the twin's alert included (a fork keeps the alert she
+    could see as the twin's and continues the escalation on a copy)."""
+    cover_base = s.alert if d.fork else s.cover_alert
     return replace(s, state=d.to_state, public_state=d.public_state, version=s.version + (1 if d.changed else 0),
-                   alert=a, challenge_n=d.challenge_n, prompt_cause=d.prompt_cause, retry_used=d.retry_used,
-                   link_state=d.link_state, lost_contact_told=d.lost_contact_told)
+                   alert=_fold_alert(s.alert, d.alert_ops, d.notify, twin=False),
+                   cover_alert=_fold_alert(cover_base, d.cover_alert_ops, d.notify, twin=True),
+                   challenge_n=d.challenge_n, prompt_cause=d.prompt_cause, retry_used=d.retry_used,
+                   link_state=d.link_state, lost_contact_told=d.lost_contact_told,
+                   public_link_state=d.public_link_state, cover_told=d.cover_told)
 
 
 def test_random_walks_hold_every_invariant():

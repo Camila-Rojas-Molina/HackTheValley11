@@ -70,13 +70,23 @@ def test_duress_escalation_walks_only_the_duress_contacts():
     assert told(d) == {C2: ["alert_duress"]}
 
 
+DURESS_TEMPLATES = ("alert_duress", "duress_pin_note")
+
+
 @pytest.mark.parametrize("ev", [Event(states.PIN_DURESS), Event(states.END_DURESS),
                                 Event(states.SQUEEZE, pattern="duress", late=True)])
-def test_turning_a_no_response_alert_into_duress_never_tells_the_excluded_contact(ev):
+def test_turning_a_no_response_alert_into_duress_shows_the_excluded_contact_only_the_twin(ev):
     a = AlertView(kind=NO_RESPONSE, level=1, recipients=(C1,))
-    d = decide(snap(level_state(1), alert=a), ev, first)
-    assert d.alert_kind_after == DURESS
-    assert C1 not in told(d) and told(d).get(C2) == ["alert_duress"]
+    s = snap(level_state(1), alert=a)
+    d = decide(s, ev, first)
+    assert d.alert_kind_after == DURESS and d.alert_masked_after and d.fork
+    assert told(d).get(C2) == ["alert_duress"]
+    # C1 gets exactly what the OK action (the real PIN, a plain squeeze) would have sent them.
+    twin = decide(s, states._ok_event(s, ev), first)
+    assert [n.template for n in d.notify if n.contact_id == C1] == \
+           [n.template for n in twin.notify if n.contact_id == C1] != []
+    assert all(n.twin and not n.silent for n in d.notify if n.contact_id == C1)
+    assert not [n for n in d.notify if n.contact_id == C1 and n.template in DURESS_TEMPLATES]
 
 
 def test_an_excluded_contact_cannot_take_pass_or_close_a_duress_alert():
@@ -126,36 +136,15 @@ def test_random_walks_never_send_the_excluded_contact_anything_about_a_duress_al
                 ev = Event(k)
             d = decide(s, ev, first)
             if d.alert_kind_after == DURESS or (s.alert is not None and s.alert.kind == DURESS):
-                assert C1 not in told(d), (s, ev, d.notify)
+                # C1 hears only the twin (what the OK action would send them), never the duress alert.
+                to_c1 = [n for n in d.notify if n.to == "contact" and n.contact_id == C1]
+                assert all(n.twin and n.template not in DURESS_TEMPLATES for n in to_c1), (s, ev, d.notify)
             s = _next(s, d)
 
 
 def _next(s: Snapshot, d) -> Snapshot:
-    """Fold a decision back into a snapshot (enough for the walk above)."""
-    alert = s.alert
-    for op in d.alert_ops:
-        if op.op == "open":
-            alert = AlertView(kind=op.kind, level=op.level or 1, masked=bool(op.masked))
-        elif op.op == "level" and alert is not None:
-            alert = AlertView(kind=alert.kind, level=op.level, is_final=op.is_final, masked=alert.masked,
-                              recipients=alert.recipients)
-        elif op.op == "ack" and alert is not None:
-            alert = AlertView(kind=alert.kind, level=alert.level, is_final=alert.is_final, masked=alert.masked,
-                              status="ACKED", acked_by=op.contact_id, recipients=alert.recipients)
-        elif op.op == "close":
-            alert = None
-        elif op.op == "upgrade" and alert is not None:
-            alert = AlertView(kind=op.kind or alert.kind, level=alert.level, is_final=alert.is_final,
-                              masked=alert.masked if op.masked is None else op.masked, status=alert.status,
-                              acked_by=alert.acked_by, recipients=alert.recipients)
-    if alert is not None:
-        new = tuple(n.contact_id for n in d.notify if n.to == "contact" and n.contact_id not in alert.recipients)
-        alert = AlertView(kind=alert.kind, level=alert.level, is_final=alert.is_final, masked=alert.masked,
-                          status=alert.status, acked_by=alert.acked_by, recipients=alert.recipients + tuple(dict.fromkeys(new)))
-    return Snapshot(state=d.to_state, public_state=d.public_state, version=s.version + 1, timings=T,
-                    contacts=s.contacts, duress_contacts=s.duress_contacts, alert=alert,
-                    challenge_n=d.challenge_n, prompt_cause=d.prompt_cause, retry_used=d.retry_used,
-                    link_state=d.link_state, lost_contact_told=d.lost_contact_told)
+    from tests.test_states import step
+    return step(s, d)
 
 
 # --- over HTTP ---------------------------------------------------------------------------------------
@@ -192,7 +181,7 @@ async def test_a_duress_pin_never_reaches_the_excluded_contact_over_http(client,
     assert s2["alert"]["kind"] == DURESS and "ack" in s2["alert"]["actions"]
 
 
-async def test_a_no_response_alert_turned_duress_goes_quiet_for_the_excluded_contact(client, db, ctx):
+async def test_a_no_response_alert_turned_duress_reads_as_a_false_alarm_for_the_excluded_contact(client, db, ctx):
     w = await make_world(client, db, contacts=2)
     c1, c2 = w.contacts
     await client.put(f"/v1/contacts/{c2['id']}/duress", headers=w.wearer, json={"eligible": True})
@@ -201,7 +190,10 @@ async def test_a_no_response_alert_turned_duress_goes_quiet_for_the_excluded_con
     r = await client.post(f"/v1/sessions/{w.session_id}/cancel", headers=w.wearer, json={"pin": DURESS_PIN})
     real_twin = r.content
     assert r.status_code == 200
+    # C1 sees the real-PIN world: a false alarm, and no alert any more.
     assert (await client.get(f"/v1/contact/{c1['token']}/status")).json() == {"alert": None, "approved": True}
+    assert [r["template"] for r in await outbox(db, w.session_id, contact_id=c1["id"])] == \
+        ["alert_no_response", "false_alarm"]
     rows = [r for r in await outbox(db, w.session_id, recipient="contact") if r["template"] == "alert_duress"]
     assert {r["contact_id"] for r in rows} == {c2["id"]}
     # The wearer's reply is still the real-PIN reply, byte for byte.

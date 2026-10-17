@@ -106,6 +106,15 @@ async def approved_contacts(conn, user_id) -> list[dict]:
     return list(await cur.fetchall())
 
 
+async def _recipients(conn, alert: Optional[dict]) -> list[int]:
+    if alert is None:
+        return []
+    cur = await conn.execute(
+        "SELECT contact_id FROM alert_recipients WHERE alert_id = %s ORDER BY first_notified_at, contact_id",
+        (alert["id"],))
+    return [r["contact_id"] for r in await cur.fetchall()]
+
+
 async def _load(conn, session_id):
     sess = await (await conn.execute(
         """SELECT s.*, u.display_name AS wearer_name
@@ -113,34 +122,36 @@ async def _load(conn, session_id):
             WHERE s.id = %s FOR UPDATE OF s""", (session_id,))).fetchone()
     if sess is None:
         raise SessionNotFound(str(session_id))
-    alert = await (await conn.execute(
-        "SELECT * FROM alerts WHERE session_id = %s AND status IN ('OPEN', 'ACKED') FOR UPDATE",
-        (session_id,))).fetchone()
+    # The escalation's open alert, and the twin's (masked duress only: see states, "the twin").
+    rows = await (await conn.execute(
+        """SELECT * FROM alerts WHERE session_id = %s AND status IN ('OPEN', 'ACKED')
+            ORDER BY cover, id FOR UPDATE""", (session_id,))).fetchall()
+    alert = next((r for r in rows if not r["cover"]), None)
+    cover = next((r for r in rows if r["cover"]), None)
     contacts = await approved_contacts(conn, sess["user_id"])
-    recipients: list[int] = []
-    if alert is not None:
-        cur = await conn.execute(
-            "SELECT contact_id FROM alert_recipients WHERE alert_id = %s ORDER BY first_notified_at, contact_id",
-            (alert["id"],))
-        recipients = [r["contact_id"] for r in await cur.fetchall()]
-    return sess, alert, contacts, recipients
+    return sess, alert, contacts, await _recipients(conn, alert), cover, await _recipients(conn, cover)
+
+
+def _alert_view(alert: Optional[dict], recipients: list[int]) -> Optional[states.AlertView]:
+    if alert is None:
+        return None
+    return states.AlertView(
+        id=alert["id"], kind=alert["kind"], level=alert["level"], is_final=alert["is_final"],
+        masked=alert["masked"], status=alert["status"], acked_by=alert["acked_by"],
+        renotify_count=alert["renotify_count"], recipients=tuple(recipients))
 
 
 def build_snapshot(sess: dict, alert: Optional[dict], contacts: list[dict], recipients: list[int],
-                   settings: Settings) -> Snapshot:
-    view = None
-    if alert is not None:
-        view = states.AlertView(
-            id=alert["id"], kind=alert["kind"], level=alert["level"], is_final=alert["is_final"],
-            masked=alert["masked"], status=alert["status"], acked_by=alert["acked_by"],
-            renotify_count=alert["renotify_count"], recipients=tuple(recipients))
+                   settings: Settings, cover: Optional[dict] = None, cover_recipients: list[int] = ()) -> Snapshot:
     return Snapshot(
         state=sess["state"], public_state=sess["public_state"], version=sess["version"],
         timings=settings.timings(sess["profile"]), contacts=tuple(c["id"] for c in contacts),
         duress_contacts=tuple(c["id"] for c in contacts if c["duress_eligible"]),
-        alert=view, challenge_n=sess["challenge_n"], prompt_cause=sess["prompt_cause"],
+        alert=_alert_view(alert, recipients), challenge_n=sess["challenge_n"], prompt_cause=sess["prompt_cause"],
         retry_used=sess["retry_used"], link_state=sess["link_state"],
-        lost_contact_told=sess["lost_contact_told"], window_multiplier=float(sess["window_multiplier"]))
+        lost_contact_told=sess["lost_contact_told"], window_multiplier=float(sess["window_multiplier"]),
+        cover_alert=_alert_view(cover, list(cover_recipients)), public_link_state=sess["public_link_state"],
+        cover_told=sess["cover_told"])
 
 
 # --- location -----------------------------------------------------------------
@@ -207,14 +218,22 @@ def contact_web_token(ctx: Ctx, contact_id: int, nonce: str) -> str:
     return derive_token(ctx.secret, "contact", str(contact_id), nonce)
 
 
-async def _release_location(conn, ctx: Ctx, user_id, alert_id: int) -> None:
+async def _release_location(conn, ctx: Ctx, user_id, alert_id: int, from_alert: Optional[int] = None) -> None:
+    """Release the last-known location to an alert (once). `from_alert`: the same location another
+    alert already released (a masked duress alert forked from the alert she could see)."""
     exists = await (await conn.execute(
         "SELECT 1 FROM location_shares WHERE alert_id = %s", (alert_id,))).fetchone()
     if exists:
         return
-    snap = await (await conn.execute(
-        "SELECT id FROM location_snapshots WHERE user_id = %s ORDER BY captured_at DESC LIMIT 1",
-        (user_id,))).fetchone()
+    snap = None
+    if from_alert is not None:
+        snap = await (await conn.execute(
+            "SELECT snapshot_id AS id FROM location_shares WHERE alert_id = %s ORDER BY id LIMIT 1",
+            (from_alert,))).fetchone()
+    if snap is None:
+        snap = await (await conn.execute(
+            "SELECT id FROM location_snapshots WHERE user_id = %s ORDER BY captured_at DESC LIMIT 1",
+            (user_id,))).fetchone()
     if snap is None:
         return
     nonce = new_token()
@@ -270,8 +289,8 @@ def _markup(kind: Optional[str], alert_id: Optional[int], contact: Optional[dict
 async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, ctx: Ctx,
                 edit: Optional[dict] = None) -> Applied:
     """Decide and apply one event for one session inside the caller's transaction."""
-    sess, alert, contacts, recipients = await _load(conn, session_id)
-    snap = build_snapshot(sess, alert, contacts, recipients, ctx.settings)
+    sess, alert, contacts, recipients, cover, cover_recipients = await _load(conn, session_id)
+    snap = build_snapshot(sess, alert, contacts, recipients, ctx.settings, cover, cover_recipients)
     d = states.decide(snap, event, ctx.choose)
     timings = snap.timings
     new_version = sess["version"] + (1 if d.changed else 0)
@@ -288,6 +307,7 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
               state = %(to)s, public_state = %(pub)s, version = %(nv)s,
               challenge_n = %(n)s, challenge_id = %(chid)s, prompt_cause = %(cause)s,
               retry_used = %(retry)s, link_state = %(link)s, lost_contact_told = %(told)s,
+              public_link_state = %(plink)s, cover_told = %(ctold)s,
               prompted_at = CASE WHEN %(stamp)s::text = 'prompted_at' THEN now() ELSE prompted_at END,
               reminded_at = CASE WHEN %(stamp)s::text = 'reminded_at' THEN now()
                                  WHEN %(stamp)s::text = 'prompted_at' THEN NULL ELSE reminded_at END,
@@ -300,20 +320,26 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
         RETURNING prompted_at, reminded_at""",
         {"to": d.to_state, "pub": d.public_state, "nv": new_version, "n": d.challenge_n,
          "chid": challenge_id, "cause": d.prompt_cause, "retry": d.retry_used, "link": d.link_state,
-         "told": d.lost_contact_told, "stamp": d.stamp, "lost": d.stamp_lost, "id": session_id,
-         "v": sess["version"], "from": sess["state"]})
+         "told": d.lost_contact_told, "plink": d.public_link_state, "ctold": d.cover_told, "stamp": d.stamp,
+         "lost": d.stamp_lost, "id": session_id, "v": sess["version"], "from": sess["state"]})
     updated = await cur.fetchone()
     if updated is None:
         raise StaleTransition(f"session {session_id} moved under us")
 
     # Timers
     if d.rekind_cover:
-        # A masked duress alert opens: the check-in schedule the wearer sees keeps running
-        # as cover timers, which the escalation's transitions do not cancel.
+        # A masked duress alert opens: the schedule the wearer sees keeps running as cover timers,
+        # which the escalation's transitions do not cancel. Check-in timers move to the twin; the
+        # timers of an alert she could see are copied (the escalation keeps its own).
         await conn.execute(
             """UPDATE timers SET kind = 'COVER_' || kind, expected_version = NULL
                 WHERE session_id = %s AND fired_at IS NULL AND cancelled_at IS NULL AND kind = ANY(%s)""",
-            (session_id, list(states.COVER_OF)))
+            (session_id, list(states.COVER_MOVE_KINDS)))
+        await conn.execute(
+            """INSERT INTO timers (session_id, kind, fire_at, payload)
+               SELECT session_id, 'COVER_' || kind, fire_at, payload FROM timers
+                WHERE session_id = %s AND fired_at IS NULL AND cancelled_at IS NULL AND kind = ANY(%s)""",
+            (session_id, list(states.COVER_COPY_KINDS)))
     if d.cancel_all_timers:
         await conn.execute(
             """UPDATE timers SET cancelled_at = now()
@@ -339,46 +365,30 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
         if t.prompt_window_s is not None:
             timer_windows[t.kind] = float(t.prompt_window_s)
 
-    # Alert
+    # Alerts: the escalation's, and the twin's (masked duress)
     alert_id = alert["id"] if alert else None
-    for op in d.alert_ops:
-        if op.op == "open":
-            row = await (await conn.execute(
-                """INSERT INTO alerts (session_id, kind, level, masked) VALUES (%s, %s, %s, %s) RETURNING id""",
-                (session_id, op.kind, op.level or 1, bool(op.masked)))).fetchone()
-            alert_id = row["id"]
-        elif op.op == "level":
-            await conn.execute(
-                """UPDATE alerts SET level = %s, is_final = %s, status = 'OPEN', acked_by = NULL,
-                          acked_at = NULL, renotify_count = 0 WHERE id = %s""",
-                (op.level, op.is_final, alert_id))
-        elif op.op == "ack":
-            await conn.execute(
-                "UPDATE alerts SET status = 'ACKED', acked_by = %s, acked_at = now() WHERE id = %s",
-                (op.contact_id, alert_id))
-        elif op.op == "close":
-            await conn.execute(
-                "UPDATE alerts SET status = %s, resolved_by = %s, closed_at = now() WHERE id = %s",
-                (op.status, op.by, alert_id))
-        elif op.op == "upgrade":
-            await conn.execute(
-                "UPDATE alerts SET kind = COALESCE(%s, kind), masked = COALESCE(%s, masked) WHERE id = %s",
-                (op.kind, op.masked, alert_id))
-        elif op.op == "renotify":
-            await conn.execute("UPDATE alerts SET renotify_count = renotify_count + 1 WHERE id = %s", (alert_id,))
+    cover_id = cover["id"] if cover else None
+    if d.fork and alert_id is not None:
+        # The alert she could see stays hers (the twin's) under its own id; the escalation goes on
+        # as a copy of it, with the same contacts told and the same released location.
+        cover_id = alert_id
+        await conn.execute("UPDATE alerts SET cover = true WHERE id = %s", (cover_id,))
+        alert_id = (await (await conn.execute(
+            """INSERT INTO alerts (session_id, kind, level, is_final, masked, status, acked_by, acked_at,
+                                   renotify_count, opened_at)
+               SELECT session_id, kind, level, is_final, masked, status, acked_by, acked_at, renotify_count, opened_at
+                 FROM alerts WHERE id = %s RETURNING id""", (cover_id,))).fetchone())["id"]
+        await conn.execute(
+            """INSERT INTO alert_recipients (alert_id, contact_id, first_notified_at)
+               SELECT %s, contact_id, first_notified_at FROM alert_recipients WHERE alert_id = %s""",
+            (alert_id, cover_id))
+        await _release_location(conn, ctx, sess["user_id"], alert_id, from_alert=cover_id)
+    alert_id = await _apply_alert_ops(conn, session_id, alert_id, d.alert_ops, cover=False)
+    cover_id = await _apply_alert_ops(conn, session_id, cover_id, d.cover_alert_ops, cover=True)
 
     # Location
-    if d.location == "release" and alert_id is not None:
-        await _release_location(conn, ctx, sess["user_id"], alert_id)
-    elif d.location == "expire_now" and alert_id is not None:
-        await conn.execute(
-            """UPDATE location_shares SET expires_at = now()
-                WHERE alert_id = %s AND (expires_at IS NULL OR expires_at > now())""", (alert_id,))
-    elif d.location == "expire_later" and alert_id is not None:
-        await conn.execute(
-            """UPDATE location_shares SET expires_at = now() + make_interval(secs => %s)
-                WHERE alert_id = %s AND (expires_at IS NULL OR expires_at > now())""",
-            (float(timings.link_expiry_s), alert_id))
+    await _apply_location(conn, ctx, sess["user_id"], alert_id, d.location, timings)
+    await _apply_location(conn, ctx, sess["user_id"], cover_id, d.cover_location, timings)
 
     # Timeline
     chain = audit.session_chain(session_id)
@@ -401,14 +411,21 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
             "t1": hm(updated["prompted_at"], tz), "t2": hm(updated["reminded_at"], tz)}
     loc_cache: dict = {}
     for i, n in enumerate(d.notify):
+        about = cover_id if n.twin else alert_id  # a twin message is about the twin's alert
+        if n.to == "contact" and about is not None and n.contact_id in by_id:
+            await conn.execute(
+                """INSERT INTO alert_recipients (alert_id, contact_id) VALUES (%s, %s)
+                   ON CONFLICT DO NOTHING""", (about, n.contact_id))
+        if n.silent:
+            continue  # the twin would have told them; they are on the escalation instead
         p = dict(base)
         p.update(n.params)
         if "contact_id" in n.params:
             p["contact"] = await _contact_name(conn, by_id, n.params["contact_id"])
         if n.template in LOCATION_TEMPLATES:
-            if "loc" not in loc_cache:
-                loc_cache["loc"] = await share_for_alert(conn, ctx, alert_id, now)
-            p["location"] = loc_cache["loc"]
+            if about not in loc_cache:
+                loc_cache[about] = await share_for_alert(conn, ctx, about, now)
+            p["location"] = loc_cache[about]
         if n.template == "ended":
             # The head of what she can see, so it recomputes from her export (masked duress too).
             p["head"] = audit.public_head(await audit.visible_rows(conn, session_id))
@@ -416,7 +433,7 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
         contact = by_id.get(n.contact_id) if n.to == "contact" else None
         if n.to == "contact" and contact is None:
             continue  # revoked or never approved: silent
-        markup = _markup(n.buttons, alert_id, contact, ctx)
+        markup = _markup(n.buttons, about, contact, ctx)
         method, edit_id = "sendMessage", None
         if (edit and n.template == "ack_thanks" and n.contact_id == event.contact_id
                 and edit.get("message_id")):
@@ -430,19 +447,60 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
                                    protect_content, timer_id, prompt_window_s)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
                ON CONFLICT (dedupe_key) DO NOTHING""",
-            (dedupe, session_id, alert_id, sess["user_id"], n.contact_id, n.to, method, edit_id,
+            (dedupe, session_id, about, sess["user_id"], n.contact_id, n.to, method, edit_id,
              "prompt" if n.deadline_timer else n.template, n.template, text,
              json.dumps(markup) if markup else None, n.to == "contact",
              timer_ids.get(n.deadline_timer) if n.deadline_timer else None,
              timer_windows.get(n.deadline_timer) if n.deadline_timer else None))
-        if n.to == "contact" and alert_id is not None:
-            await conn.execute(
-                """INSERT INTO alert_recipients (alert_id, contact_id) VALUES (%s, %s)
-                   ON CONFLICT DO NOTHING""", (alert_id, n.contact_id))
 
     cmd = states.device_cmd(d.public_state, d.challenge_n, challenge_id, d.prompt_cause)
     return Applied(decision=d, session_id=str(session_id), version=new_version,
                    public_state=d.public_state, cmd=cmd, alert_id=alert_id)
+
+
+async def _apply_alert_ops(conn, session_id, alert_id: Optional[int], ops: list, *, cover: bool) -> Optional[int]:
+    for op in ops:
+        if op.op == "open":
+            row = await (await conn.execute(
+                """INSERT INTO alerts (session_id, kind, level, masked, cover) VALUES (%s, %s, %s, %s, %s)
+                   RETURNING id""", (session_id, op.kind, op.level or 1, bool(op.masked), cover))).fetchone()
+            alert_id = row["id"]
+        elif op.op == "level":
+            await conn.execute(
+                """UPDATE alerts SET level = %s, is_final = %s, status = 'OPEN', acked_by = NULL,
+                          acked_at = NULL, renotify_count = 0 WHERE id = %s""",
+                (op.level, op.is_final, alert_id))
+        elif op.op == "ack":
+            await conn.execute(
+                "UPDATE alerts SET status = 'ACKED', acked_by = %s, acked_at = now() WHERE id = %s",
+                (op.contact_id, alert_id))
+        elif op.op == "close":
+            await conn.execute(
+                "UPDATE alerts SET status = %s, resolved_by = %s, closed_at = now() WHERE id = %s",
+                (op.status, op.by, alert_id))
+        elif op.op == "upgrade":
+            await conn.execute(
+                "UPDATE alerts SET kind = COALESCE(%s, kind), masked = COALESCE(%s, masked) WHERE id = %s",
+                (op.kind, op.masked, alert_id))
+        elif op.op == "renotify":
+            await conn.execute("UPDATE alerts SET renotify_count = renotify_count + 1 WHERE id = %s", (alert_id,))
+    return alert_id
+
+
+async def _apply_location(conn, ctx: Ctx, user_id, alert_id: Optional[int], op: Optional[str], timings) -> None:
+    if op is None or alert_id is None:
+        return
+    if op == "release":
+        await _release_location(conn, ctx, user_id, alert_id)
+    elif op == "expire_now":
+        await conn.execute(
+            """UPDATE location_shares SET expires_at = now()
+                WHERE alert_id = %s AND (expires_at IS NULL OR expires_at > now())""", (alert_id,))
+    elif op == "expire_later":
+        await conn.execute(
+            """UPDATE location_shares SET expires_at = now() + make_interval(secs => %s)
+                WHERE alert_id = %s AND (expires_at IS NULL OR expires_at > now())""",
+            (float(timings.link_expiry_s), alert_id))
 
 
 async def _contact_name(conn, by_id: dict, contact_id) -> str:
@@ -495,6 +553,34 @@ async def active_session_id(conn, user_id) -> Optional[str]:
             ORDER BY (public_state = 'ENDED'), created_at DESC LIMIT 1""",
         (user_id,))).fetchone()
     return row["id"] if row else None
+
+
+def contact_sees(alert: dict, on_duress_ladder: bool) -> bool:
+    """Whether a contact told about this open alert sees it: the twin's alert (masked duress) only
+    for a contact kept out of duress alerts, a duress alert only for a duress contact."""
+    if alert["cover"]:
+        return not on_duress_ladder
+    if alert["kind"] == states.DURESS:
+        return on_duress_ladder
+    return True
+
+
+async def contact_alert(conn, contact: dict, alert_id: int) -> Optional[dict]:
+    """The alert a contact's button acts on, from the alert id the button carries (Telegram). A duress
+    contact pressing an old button of the alert she could see (now the twin's) acts on the
+    escalation that continues it; a contact kept out of duress alerts acts on the twin's."""
+    alert = await (await conn.execute(
+        "SELECT id, session_id, kind, cover FROM alerts WHERE id = %s AND status IN ('OPEN', 'ACKED')",
+        (alert_id,))).fetchone()
+    if alert is None:
+        return None
+    on_ladder = contact["id"] in await duress_ladder_ids(conn, contact["user_id"])
+    if alert["cover"] and on_ladder:
+        alert = await (await conn.execute(
+            """SELECT id, session_id, kind, cover FROM alerts
+                WHERE session_id = %s AND status IN ('OPEN', 'ACKED') AND NOT cover""",
+            (alert["session_id"],))).fetchone()
+    return alert if alert is not None and contact_sees(alert, on_ladder) else None
 
 
 def public_view(sess: dict) -> dict:

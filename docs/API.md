@@ -39,6 +39,13 @@ tokens and timestamps shortened.
 - **Byte-identical PINs:** the real PIN and the duress PIN produce the same status code and the same bytes on
   `cancel` and `end`. The duress alert is masked: the device and the wearer see `state_public` as `ARMED`,
   or `ENDED` after `end`.
+- **Masked duress is a whole twin session.** After a duress PIN or a duress squeeze (in any active state,
+  during an alert too) every wearer read answers as the session she would have had with the OK action (the
+  real PIN, a plain squeeze): replies, device `cmd`, status and `link_state`, timeline, export,
+  `GET /v1/me/alerts` and her Reminders messages. The twin keeps its own check-ins, its own alert (the one she
+  could already see, as the OK action left it, or one its own unanswered check-in opens), its own ladder and
+  its own lost-contact notice. The escalation runs underneath and is hidden until a contact confirms she is
+  safe.
 - **Sensors only bring a check-in forward:** head position, fall-like motion, off-body and heart rate can only
   move `ARMED` to `PROMPTED` with a counted challenge (blink N, squeeze N). They never open an alert.
 - **Closing an alert:** only a contact's "she's safe" or the wearer's real PIN closes one. A device squeeze
@@ -129,7 +136,7 @@ heartbeat after a `LOST_CONTACT` restores the link and tells the contacts who we
 
 | `type` | `payload` | Effect |
 |---|---|---|
-| `squeeze` | `{pattern: plain\|duress\|unrecognized, k, buffered?}` | Answers a prompt (`k` must equal the challenge count, 2 for a routine prompt). Wrong `k` gets one retry with a new count. `duress` opens a masked alert. During an alert it is recorded only. |
+| `squeeze` | `{pattern: plain\|duress\|unrecognized, k, buffered?}` | Answers a prompt (`k` must equal the challenge count, 2 for a routine prompt). Wrong `k` gets one retry with a new count. `duress` opens a masked alert, or turns the open alert into a masked duress alert. Otherwise, during an alert, it is recorded only. |
 | `head_position_change`, `fall_like`, `offbody` | any object (not read) | `ARMED` → `PROMPTED` with a counted challenge, at most once per cooldown (60 s demo, 15 min real). |
 | `prompt_shown` | `{}` | Lowers the prompt deadline to "shown + window". |
 
@@ -153,7 +160,9 @@ device and are asked to still check on her:
 ```
 
 **Idempotent:** a replayed `event_id` (same device) returns the stored reply byte for byte and changes nothing.
-A duress squeeze returns exactly the bytes a plain squeeze would have returned.
+A duress squeeze returns exactly the bytes a plain squeeze would have returned, and from then on the session
+answers like one that got the plain squeeze (see "Masked duress is a whole twin session" above): a later PIN
+reads `ARMED` / `ENDED` with the LED off exactly as it would after a plain squeeze.
 
 ## 4. Heart rate
 
@@ -302,7 +311,9 @@ Wrong PIN: `403 {"error":"wrong_pin","ok":false}`.
 - **Real PIN during a prompt:** back to `ARMED`.
 - **Real PIN during an alert:** `FALSE_ALARM`, and everyone notified is told the wearer cancelled with her PIN.
 - **Real PIN during a duress alert:** the alert stays open; contacts are asked to confirm in person.
-- **Duress PIN:** opens a masked duress alert (contacts get a silent help request) and answers as above.
+- **Duress PIN:** opens a masked duress alert (contacts get a silent help request) and answers as above. On an
+  alert she can already see, that alert stays hers and reads exactly as the real PIN left it (`FALSE_ALARM`);
+  the duress escalation continues on its own, hidden alert.
 
 ### `POST /v1/sessions/{session_id}/end`
 
@@ -342,8 +353,10 @@ characters.
 Wearer key. Her record of every alert: who was alerted (`alerted`, with when each contact was first told)
 and who acknowledged or answered (`acknowledged`: `ack`, `pass`, `safe`, `cant_reach`, with the source and
 the result). Newest first. Masking follows the timeline: an open masked duress alert is left out until it
-closes (so the reply after a duress PIN is the same bytes as after the real PIN), and an open duress alert
-that is not masked (a duress squeeze during a no-response alert) reads as `NO_RESPONSE` until it closes.
+closes, and in its place she sees the twin's alert, as the real PIN or a plain squeeze would have left it
+(the alert she could already see keeps its id). So after a duress PIN or a duress squeeze the record reads
+exactly as after the real PIN or a plain squeeze, and contacts told only about the hidden duress alert do not
+appear in it until it closes.
 
 ```json
 {"alerts":[{"acknowledged":[{"action":"ack","at":"2026-10-17T11:20:03.1+00:00","contact_id":12,"name":"Sam",
@@ -410,9 +423,12 @@ Wearer key. `{"eligible": true}` adds a contact to the duress recipients; `false
 alert (duress squeeze or duress PIN) escalates only through the chosen duress recipients, in ladder order.
 **If the wearer chooses none, every approved contact can receive a duress alert** (`duress_recipients.mode`
 is `"all approved contacts (none chosen)"`). A contact kept out of the list is never told about a duress
-alert, cannot take, pass on or close it, and their page and buttons answer exactly as when no alert is open,
-even if they were told about the same alert before it turned into duress; a duress contact can take over
-an "I'm on it" they held. `404` for a contact that is not the wearer's.
+alert and cannot take, pass on or close it; a duress contact can take over an "I'm on it" they held. They
+see the twin instead (see "Masked duress is a whole twin session"): exactly the messages, page and buttons
+they would have had if she had used the real PIN or a plain squeeze. For example, told about a no-response
+alert that then turned into duress, they get "False alarm: … cancelled with her PIN" after the duress PIN,
+and their location link stops working as it would after a real false alarm. `404` for a contact that is not
+the wearer's.
 
 ```json
 {"ok": true, "contact_id": 2, "duress_eligible": true}
@@ -559,7 +575,7 @@ action. They act on the demo wearer (`DEMO_SEED=1`).
 | Endpoint | Body | Reply |
 |---|---|---|
 | `GET /v1/admin/timers` | `?recent=N` (0–200) adds the last N fired timers with their lag | `{"timers":[{"id","session_id","kind","fire_at","in_s","expected_version"}],"recent_fired":[{"kind":"REMINDER_TIMEOUT","lag_s":0.331,"result":"escalated",…}]}` |
-| `GET /v1/admin/overview` | — | True states, including masked alerts: `{"sessions":[{"state","public_state","link_state","version",…}],"alerts":[…],"outbox":[…]}` |
+| `GET /v1/admin/overview` | — | True states, including masked alerts: `{"sessions":[{"state","public_state","link_state","public_link_state","version",…}],"alerts":[…],"cover_alerts":[…],"outbox":[…]}`; `cover_alerts` are the twins' alerts of masked sessions |
 | `GET /v1/admin/outbox` | `?session_id=&contact_id=&recipient=wearer\|contact\|chat&limit=1..1000` | `{"outbox":[{"id","template","text","status","channel","attempts","dedupe_key",…}]}` |
 | `POST /v1/demo/checkin-now` | — | `{"ok":true,"result":"prompted","state":"PROMPTED"}` |
 | `POST /v1/demo/inject` | `{"kind":"head_position"\|"fall_like"\|"offbody"}` | `{"ok":true,"reason":"head_position_change","label":"head position change → early check-in","result":"prompted"}` |

@@ -169,7 +169,8 @@ async def session_row(db, sid) -> dict:
 async def open_alert(db, sid) -> Optional[dict]:
     async with db.connection() as conn:
         return await (await conn.execute(
-            "SELECT * FROM alerts WHERE session_id = %s AND status IN ('OPEN', 'ACKED')", (sid,))).fetchone()
+            "SELECT * FROM alerts WHERE session_id = %s AND status IN ('OPEN', 'ACKED') AND NOT cover",
+            (sid,))).fetchone()
 
 
 async def pending_timers(db, sid) -> list[dict]:
@@ -212,9 +213,20 @@ async def outbox(db, sid=None, *, contact_id=None, recipient=None) -> list[dict]
 
 async def deliver_all(db, ctx, api=None) -> None:
     sender = Sender(db, ctx, api)
-    for _ in range(50):
+    for _ in range(2000):  # the shared test database holds every earlier test's rows too
         if await sender.run_once() == 0:
             return
+
+
+async def expire_leases(db, ctx, *worlds) -> None:
+    """These worlds' devices go silent: their leases run out and every lost link is noticed (other
+    tests' sessions too, so check_leases' batches of 10 can reach these)."""
+    async with db.connection() as conn:
+        for w in worlds:
+            await conn.execute("UPDATE devices SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
+                               (w.device_id,))
+    while await timers.check_leases(db, ctx):
+        pass
 
 
 async def to_state(client, db, ctx, w: World, target: str) -> None:

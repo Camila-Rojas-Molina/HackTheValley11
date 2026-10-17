@@ -272,19 +272,23 @@ async def join(request: Request, token: str, body: Optional[JoinIn] = None):
 async def _alert_for_contact(conn, contact: dict) -> Optional[dict]:
     """The open alert this contact has been told about, if any. A duress alert does not exist for a
     contact the wearer keeps out of duress alerts, even one told about it before it turned into
-    duress: their page and buttons answer exactly as when no alert is open."""
+    duress: they see the twin's alert instead (states.py, "the twin"), the one they would see had she
+    taken the OK action, and their buttons act on it. Duress contacts never see the twin's alert."""
     if contact["approved_at"] is None:
         return None
-    alert = await (await conn.execute(
+    rows = await (await conn.execute(
         """SELECT a.*, s.state, s.user_id FROM alerts a
              JOIN sessions s ON s.id = a.session_id
              JOIN alert_recipients r ON r.alert_id = a.id AND r.contact_id = %s
             WHERE s.user_id = %s AND a.status IN ('OPEN', 'ACKED')
-            ORDER BY a.id DESC LIMIT 1""", (contact["id"], contact["user_id"]))).fetchone()
-    if alert is not None and alert["kind"] == states.DURESS and \
-            contact["id"] not in await engine.duress_ladder_ids(conn, contact["user_id"]):
+            ORDER BY a.id DESC""", (contact["id"], contact["user_id"]))).fetchall()
+    if not rows:
         return None
-    return alert
+    on_duress_ladder = contact["id"] in await engine.duress_ladder_ids(conn, contact["user_id"])
+    for alert in rows:
+        if engine.contact_sees(alert, on_duress_ladder):
+            return alert
+    return None
 
 
 @router.get("/v1/contact/{token}/status")
@@ -355,8 +359,9 @@ async def _contact_event(request: Request, token: str, event_kind: str, action: 
             ack = await (await conn.execute(
                 """INSERT INTO acks (alert_id, contact_id, action, source) VALUES (%s, %s, %s, 'web')
                    RETURNING id""", (alert["id"], contact["id"], action))).fetchone()
-            applied = await engine.apply(conn, alert["session_id"], states.Event(event_kind, contact_id=contact["id"]),
-                                         actor=f"contact:{contact['id']}", event_key=f"web:{uuid.uuid4()}", ctx=ctx)
+            ev = states.Event(event_kind, contact_id=contact["id"], twin=bool(alert["cover"]))
+            applied = await engine.apply(conn, alert["session_id"], ev, actor=f"contact:{contact['id']}",
+                                         event_key=f"web:{uuid.uuid4()}", ctx=ctx)
             await conn.execute("UPDATE acks SET result = %s WHERE id = %s", (applied.decision.reply, ack["id"]))
     return {"ok": applied.decision.reply not in ("ignored",), "result": applied.decision.reply}
 

@@ -151,13 +151,12 @@ async def _handle_callback(conn, ctx: Ctx, update: dict) -> dict:
         return answer
     from_id = (cq.get("from") or {}).get("id")
     contact = await (await conn.execute(
-        """SELECT id FROM contacts WHERE id = %s AND telegram_chat_id = %s
+        """SELECT id, user_id FROM contacts WHERE id = %s AND telegram_chat_id = %s
               AND approved_at IS NOT NULL AND revoked_at IS NULL""", (contact_id, from_id))).fetchone()
-    alert = await (await conn.execute(
-        "SELECT id, session_id FROM alerts WHERE id = %s AND status IN ('OPEN', 'ACKED')",
-        (alert_id,))).fetchone()
+    alert = await engine.contact_alert(conn, contact, alert_id) if contact is not None else None
     if contact is None or alert is None:
         return answer
+    alert_id = alert["id"]
     # Lock the session first, as the timer worker and every other path do. Inserting into acks
     # first would take a key-share lock on the alert before the session lock (deadlock risk).
     await conn.execute("SELECT 1 FROM sessions WHERE id = %s FOR UPDATE", (alert["session_id"],))
@@ -169,7 +168,8 @@ async def _handle_callback(conn, ctx: Ctx, update: dict) -> dict:
         return answer
     message = cq.get("message") or {}
     edit = {"message_id": message.get("message_id"), "prefix": message.get("text")}
-    applied = await engine.apply(conn, alert["session_id"], states.Event(event_kind, contact_id=contact_id),
+    applied = await engine.apply(conn, alert["session_id"],
+                                 states.Event(event_kind, contact_id=contact_id, twin=bool(alert["cover"])),
                                  actor=f"contact:{contact_id}", event_key=f"tg:{update['update_id']}", ctx=ctx,
                                  edit=edit)
     await conn.execute("UPDATE acks SET result = %s WHERE id = %s", (applied.decision.reply, ins["id"]))

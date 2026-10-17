@@ -159,20 +159,25 @@ async def admin_overview(request: Request):
     require_admin(request)
     async with get_db(request).connection() as conn:
         sessions = await (await conn.execute(
-            """SELECT s.id, s.state, s.public_state, s.link_state, s.version, s.profile, s.challenge_n,
-                      s.prompt_cause, u.display_name
+            """SELECT s.id, s.state, s.public_state, s.link_state, s.public_link_state, s.version, s.profile,
+                      s.challenge_n, s.prompt_cause, u.display_name
                  FROM sessions s JOIN users u ON u.id = s.user_id
                 WHERE s.state <> 'ENDED' ORDER BY s.created_at""")).fetchall()
-        alerts = await (await conn.execute(
-            """SELECT id, session_id, kind, level, is_final, masked, status, acked_by, renotify_count
+        rows = await (await conn.execute(
+            """SELECT id, session_id, kind, level, is_final, masked, status, acked_by, renotify_count, cover
                  FROM alerts WHERE status IN ('OPEN', 'ACKED') ORDER BY id""")).fetchall()
+        alerts = [r for r in rows if not r["cover"]]
+        covers = [r for r in rows if r["cover"]]  # the twins' alerts (masked duress)
         outbox = await (await conn.execute(
             """SELECT id, recipient, contact_id, template, status, channel, created_at
                  FROM outbox ORDER BY id DESC LIMIT 30""")).fetchall()
     return {
         "sessions": [{**{k: v for k, v in r.items() if k != "id"}, "id": str(r["id"])} for r in sessions],
-        "alerts": [{**{k: v for k, v in r.items() if k != "session_id"}, "session_id": str(r["session_id"]),
+        "alerts": [{**{k: v for k, v in r.items() if k not in ("session_id", "cover")},
+                    "session_id": str(r["session_id"]),
                     "final_banner": states.FINAL_BANNER if r["is_final"] else None} for r in alerts],
+        "cover_alerts": [{**{k: v for k, v in r.items() if k not in ("session_id", "cover")},
+                          "session_id": str(r["session_id"])} for r in covers],
         "outbox": [{**r, "created_at": r["created_at"].isoformat()} for r in outbox],
     }
 

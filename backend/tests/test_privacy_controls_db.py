@@ -144,8 +144,8 @@ async def test_record_needs_the_wearer_key(client):
 
 
 async def test_a_late_duress_squeeze_does_not_show_in_the_record_while_the_alert_is_open(client, db, ctx):
-    """A duress squeeze during a no-response alert upgrades it without masking it. Her record keeps
-    calling it a no-response alert until it closes, as her timeline hides the duress entry."""
+    """A duress squeeze during a no-response alert masks it like any duress signal: her record keeps
+    showing the no-response alert she could see (the twin's), as her timeline hides the duress entry."""
     plain, squeezed = await make_world(client, db, contacts=1), await make_world(client, db, contacts=1)
     for w, pattern in ((plain, "plain"), (squeezed, "duress")):
         await to_state(client, db, ctx, w, "ESCALATED_L1")

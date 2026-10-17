@@ -128,8 +128,9 @@ async def session_status(request: Request, session_id: str):
         user = await require_wearer(request, conn)
         sess = await _own_session(conn, user, session_id)
         view = engine.public_view(sess)
+        # The link state she sees: a session that only looks ended keeps the one it ended with.
         return {"session_id": str(sess["id"]), "state_public": view["state_public"], "cmd": view["cmd"],
-                "link_state": sess["link_state"], "profile": sess["profile"], "mode": sess["mode"],
+                "link_state": sess["public_link_state"], "profile": sess["profile"], "mode": sess["mode"],
                 "who_can_be_alerted": await who_can_be_alerted(conn, user["id"])}
 
 
@@ -229,20 +230,18 @@ async def export(request: Request):
 @router.get("/v1/me/alerts")
 async def my_alerts(request: Request):
     """The wearer's record of who was alerted and who acknowledged, per alert (research 1.15). An open
-    masked (duress) alert is left out until it closes, exactly like its timeline entries, so the reply
-    after a duress PIN is the same bytes as after the real PIN; an open unmasked one (a duress squeeze
-    during a no-response alert) reads as no-response until it closes."""
+    masked (duress) alert is left out until it closes, exactly like its timeline entries; in its place
+    she sees the twin's alert (states.py, "the twin"): the alert she could already see, as the OK
+    action left it, or the one the twin opened itself. So the record after a duress PIN or a duress
+    squeeze reads exactly as after the real PIN or a plain squeeze."""
     db = get_db(request)
     async with db.connection() as conn:
         user = await require_wearer(request, conn)
         alerts = await (await conn.execute(
             """SELECT a.id, a.session_id, a.status, a.level, a.is_final, a.resolved_by, a.opened_at, a.closed_at,
-                      -- An open duress alert that is not masked (a duress squeeze during a no-response
-                      -- alert) reads as the no-response alert she can see, until it closes.
-                      CASE WHEN a.kind = 'DURESS' AND a.status IN ('OPEN', 'ACKED') THEN 'NO_RESPONSE'
-                           ELSE a.kind END AS kind
+                      a.kind
                  FROM alerts a JOIN sessions s ON s.id = a.session_id
-                WHERE s.user_id = %s AND NOT (a.masked AND a.status IN ('OPEN', 'ACKED'))
+                WHERE s.user_id = %s AND (a.cover OR NOT (a.masked AND a.status IN ('OPEN', 'ACKED')))
                 ORDER BY a.opened_at DESC, a.id DESC""", (user["id"],))).fetchall()
         ids = [a["id"] for a in alerts]
         told = await (await conn.execute(
