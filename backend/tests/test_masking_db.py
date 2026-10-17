@@ -193,3 +193,46 @@ async def test_heart_rate_rule_during_masked_duress_prompts_like_armed(client, d
     assert await device_view(client, real) == await device_view(client, duress)
     assert await wearer_texts(db, real) == await wearer_texts(db, duress)
     assert (await session_row(db, duress.session_id))["state"].startswith("ESCALATED_")
+
+
+async def _squeeze(client, w, event_id, pattern, k):
+    return await client.post("/v1/device/events", headers=w.device(),
+                             json={"event_id": event_id, "type": "squeeze", "payload": {"pattern": pattern, "k": k}})
+
+
+async def test_wearer_input_during_masked_duress_is_answered_like_armed(client, db, ctx, first_choice):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress)
+    inputs = [("b1:600", "unrecognized", 5), ("b1:601", "plain", 2), ("b1:602", "duress", 3)]
+    for event_id, pattern, k in inputs:
+        rr, rd = await _squeeze(client, real, event_id, pattern, k), await _squeeze(client, duress, event_id, pattern, k)
+        assert rr.content == rd.content, (pattern, rr.content, rd.content)
+    cr = await client.post(f"/v1/sessions/{real.session_id}/checkin", json={}, headers=real.wearer)
+    cd = await client.post(f"/v1/sessions/{duress.session_id}/checkin", json={}, headers=duress.wearer)
+    assert cr.content == cd.content
+    assert await wearer_texts(db, real) == await wearer_texts(db, duress)
+    assert await visible(client, real) == await visible(client, duress)
+    # A cover prompt answered with the right count goes back to ARMED, like the twin.
+    for w in (real, duress):
+        await advance(db, ctx, w.session_id, 61)
+    rr, rd = await _squeeze(client, real, "b1:603", "plain", 2), await _squeeze(client, duress, "b1:603", "plain", 2)
+    assert rr.content == rd.content and rr.json()["state_public"] == states.ARMED
+    assert await wearer_texts(db, real) == await wearer_texts(db, duress)
+    assert await visible(client, real) == await visible(client, duress)
+    # The contacts of the duress world still hear that she responded, and the alert stays open.
+    c1 = [o["template"] for o in await outbox(db, duress.session_id, contact_id=duress.contacts[0]["id"])]
+    assert "late_device" in c1 and "late_phone" in c1
+    assert (await session_row(db, duress.session_id))["state"].startswith("ESCALATED_")
+
+
+async def test_after_a_duress_end_wearer_input_gets_no_wearer_message(client, db, ctx):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress, action="end")
+    rr, rd = await _squeeze(client, real, "b1:700", "plain", 2), await _squeeze(client, duress, "b1:700", "plain", 2)
+    assert rr.content == rd.content
+    cr = await client.post(f"/v1/sessions/{real.session_id}/checkin", json={}, headers=real.wearer)
+    cd = await client.post(f"/v1/sessions/{duress.session_id}/checkin", json={}, headers=duress.wearer)
+    assert cr.content == cd.content
+    assert [t.split(" Timeline")[0] for t in await wearer_texts(db, real)] == \
+           [t.split(" Timeline")[0] for t in await wearer_texts(db, duress)] == ["Ended ✓"]
+    assert await visible(client, real) == await visible(client, duress)

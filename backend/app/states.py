@@ -96,7 +96,7 @@ ALL_EVENTS = (
 SENSOR_EVENTS = frozenset({PULL_FORWARD})
 RESOLVING_EVENTS = frozenset({CONTACT_SAFE, PIN_REAL, END_REAL})
 # Wearer-facing events that a masked session answers through its twin.
-COVER_EVENTS = frozenset(COVER_TIMER_KINDS) | {SESSION_END_DUE, PULL_FORWARD}
+COVER_EVENTS = frozenset(COVER_TIMER_KINDS) | {SESSION_END_DUE, PULL_FORWARD, SQUEEZE, WEARER_OK}
 
 # Timers tied to the current state carry expected_version and are cancelled on
 # every transition. Independent timers survive transitions (cover timers are

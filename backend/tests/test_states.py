@@ -378,3 +378,15 @@ def test_masked_duress_sensor_input_prompts_the_cover_only():
     assert _wearer_view(d) == _wearer_view(twin)
     assert d.to_state == s.state and not d.alert_ops and d.public_changed
     assert [t.kind for t in d.timers] == [states.COVER_PROMPT_TIMEOUT]
+
+
+@pytest.mark.parametrize("public", [ARMED, ENDED])
+def test_masked_duress_wearer_input_matches_the_twin_and_still_tells_contacts(public):
+    s = masked_duress(public=public)
+    twin_state = snap(public)
+    for ev in (Event(states.SQUEEZE, pattern="unrecognized", k=5), Event(states.SQUEEZE, pattern="plain", k=2),
+               Event(states.WEARER_OK)):
+        d, twin = decide(s, ev, first), decide(twin_state, ev, first)
+        assert _wearer_view(d) == _wearer_view(twin), ev
+        assert d.to_state == s.state and not d.alert_ops
+        assert [n.template for n in d.notify if n.to == "contact"] in (["late_device"], ["late_phone"])
