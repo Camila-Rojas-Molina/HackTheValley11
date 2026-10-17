@@ -171,3 +171,15 @@ async def test_live_responses_pass_the_wording_check(client):
         texts.append((await client.get(path)).text)
     for t in texts:
         assert not hits(t), hits(t)
+
+
+async def test_a_resident_whose_data_stopped_stays_on_the_alert_list(client, db):
+    from app import care
+    await seed(client)
+    async with db.connection() as conn:
+        await conn.execute("DELETE FROM care_daily_metrics WHERE resident_id = 'R-02' AND day >= %s",
+                           (END - timedelta(days=1),))
+        await care.evaluate(conn, END)
+    alerts = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts")).json()["alerts"]}
+    assert alerts["R-02"]["level"] == care.LEVEL_NO_DATA
+    assert alerts["R-02"]["briefing_source"] == "template"

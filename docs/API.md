@@ -635,7 +635,7 @@ scores it. Body optional: `{"seed": 11, "end_day": "2026-10-16"}`.
 
 ```json
 {"ok":true,"synthetic":true,"seed":11,"as_of":"2026-10-16","residents":20,"days":14,"rows":280,
- "levels":{"low":13,"watch":1,"check today":6},"scripted_change":{"residents":7,"flagged":7},
+ "levels":{"low":13,"watch":1,"check today":6,"not enough data":0},"scripted_change":{"residents":7,"flagged":7},
  "no_change_scripts":{"residents":13,"flagged":0},
  "notice":"Hackathon prototype. Synthetic data only; no real residents. Rule-based change flags, not a medical device and not clinically validated. Thresholds are untested assumptions."}
 ```
@@ -655,13 +655,13 @@ and `hint` names the seed endpoint.
 
 ### `GET /v1/care/alerts`
 
-The latest cards at `watch` or `check today`: `check today` first, then by score. `?include_low=true`
-returns all 20.
+The latest cards at `watch`, `check today` or `not enough data`: `check today` first, then `watch`, then
+`not enough data`, then by score. `?include_low=true` returns all 20.
 
 | Card field | Meaning |
 |---|---|
 | `score` | 0–100, the sum of the rule contributions (30 + 40 + 30 at most) |
-| `level` | `check today` from 45 points or when any rule reaches its top band; `watch` from 15; else `low` |
+| `level` | `check today` from 45 points or when any rule reaches its top band; `watch` from 15; else `low`, or `not enough data` when a rule could not score (its `suggested_check` says which device data is missing) |
 | `rules[]` | `rule, observed, baseline, unit, contribution, explanation`, plus `label, scored, top_band, threshold, change_pct, recent_values, baseline_values, max_contribution, threshold_status` |
 | `suggested_check` | what a care aide does next |
 | `briefing` | plain-language summary of the card |
@@ -672,7 +672,8 @@ balance and heart rate have both settled) and `night_restlessness` (both of the 
 usual). Each compares the last 48 h with the resident's first 48 h in the record.
 
 The briefing is written after the score and level are fixed and cannot change them. With `VULTR_API_KEY`
-set, each `watch` / `check today` card's briefing is reworded by Vultr (section 11); `low` cards are not sent.
+set, each `watch` / `check today` card's briefing is reworded by Vultr (section 11); `low` and `not enough data`
+cards are not sent.
 The text is shown only if it passes the wording rules and every number in it is on the card; otherwise,
 and with no key, the card keeps the rule template. Shortened card:
 

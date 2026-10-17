@@ -68,10 +68,10 @@ async def word_briefings(cards: list[dict], **vultr_options) -> list[dict]:
     Runs on finished cards: score, level, rules and suggested check are already set and are
     not touched. vultr.abriefing never raises and never blocks the event loop the KAZE timer
     worker shares. Without a key, on any error or timeout, or when the text breaks the wording
-    rules, the card keeps care.local_briefing and briefing_source is "template". "low" cards
-    are not sent. vultr_options (env, transport) are for tests.
+    rules, the card keeps care.local_briefing and briefing_source is "template". "low" and
+    "not enough data" cards are not sent. vultr_options (env, transport) are for tests.
     """
-    worded = [c for c in cards if c.get("level") != care.LEVEL_LOW]
+    worded = [c for c in cards if c.get("level") in care.FLAGGED]
     results = await asyncio.gather(*(vultr.abriefing(c, **vultr_options) for c in worded))
     for card in cards:
         card["briefing_source"] = "template"

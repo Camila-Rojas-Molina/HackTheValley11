@@ -237,3 +237,24 @@ def test_suggested_check_is_for_the_aide_and_points_to_the_nurse():
         assert card["suggested_check"].endswith("Tell the nurse what you see.")
     for card in by_level["check today"]:
         assert card["suggested_check"].startswith("Ask the nurse to review this resident today.")
+
+
+def test_missing_device_data_is_never_reported_as_routine_care():
+    """A scripted decline whose last two days lost their data must not read 'continue routine care'."""
+    cohort = care.generate_cohort(care.DEFAULT_SEED, END)
+    r02 = next(r for r in cohort if r.id == "R-02")
+    assert care.score_resident(r02.id, r02.display_name, r02.days, END)["level"] != care.LEVEL_LOW
+    not_worn = [replace(d, wear_hours=5.0, stand_ups=0) if d.day >= END - timedelta(days=1) else d
+                for d in r02.days]
+    gone = [d for d in r02.days if d.day < END - timedelta(days=1)]
+    for days in (not_worn, gone):
+        card = care.score_resident(r02.id, r02.display_name, days, END)
+        assert card["level"] == care.LEVEL_NO_DATA, card["level"]
+        assert "continue routine care" not in card["suggested_check"]
+        assert card["suggested_check"].startswith("Device data is missing for:")
+        assert not card["data_quality"]["all_rules_scored"]
+    # Real scores still win: a rule that scored high with others unscored keeps its level.
+    days = flat_days(sway_rms=0.2)
+    days[-1] = replace(days[-1], stand_ups=0)
+    card = care.score_resident("X", "X", days, END)
+    assert card["level"] == care.LEVEL_CHECK and not card["data_quality"]["all_rules_scored"]

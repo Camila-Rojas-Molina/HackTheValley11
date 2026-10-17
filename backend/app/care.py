@@ -23,7 +23,7 @@ from the script, not from any study.
 
 Card. score 0-100 is the sum of the rule contributions (30 + 40 + 30 at most). Level:
 "check today" from 45 points or when any rule reaches its top band, "watch" from 15,
-otherwise "low". Every threshold here is an untested assumption (a demo parameter), not a
+otherwise "low", or "not enough data" when a rule could not score (the data stopped). Every threshold here is an untested assumption (a demo parameter), not a
 clinical cut-off, and the API says so on every card.
 """
 from __future__ import annotations
@@ -42,7 +42,9 @@ METHOD = "deterministic rules against the resident's own baseline; no model"
 SWAY, SETTLE, NIGHT = "postural_sway_drift", "rise_to_settle_time", "night_restlessness"
 RULES = (SWAY, SETTLE, NIGHT)
 LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK = "low", "watch", "check today"
-LEVELS = (LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK)
+LEVEL_NO_DATA = "not enough data"  # below "watch" with a rule unable to score: the data stopped
+LEVELS = (LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK, LEVEL_NO_DATA)
+FLAGGED = (LEVEL_WATCH, LEVEL_CHECK)
 
 DEFAULT_SEED = 11
 RESIDENT_COUNT = 20
@@ -67,7 +69,8 @@ THRESHOLDS = {
     SWAY: "+20% -> 15, +35% -> 25, +50% -> 30 points; days worn at least 6 h",
     SETTLE: "+25% -> 20, +40% -> 30, +60% -> 40 points, and at least 5 s slower; 8+ stand-ups per 48 h",
     NIGHT: "both of the last 2 nights +50% -> 15, +100% -> 30 points, and at least 15 min above; nights worn 4 h+",
-    "levels": "watch from 15 points; check today from 45 points or any rule in its top band",
+    "levels": ("watch from 15 points; check today from 45 points or any rule in its top band; "
+               "not enough data below 15 points when a rule could not score"),
 }
 MAX_POINTS = {SWAY: SWAY_BANDS[0][1], SETTLE: SETTLE_BANDS[0][1], NIGHT: NIGHT_BANDS[0][1]}
 assert sum(MAX_POINTS.values()) == 100
@@ -246,7 +249,11 @@ def level_for(score: int, top_band: bool) -> str:
     return LEVEL_LOW
 
 
-def suggested_check(level: str, scored_rules: Sequence[str]) -> str:
+def suggested_check(level: str, scored_rules: Sequence[str], missing: Sequence[str] = ()) -> str:
+    if level == LEVEL_NO_DATA:
+        labels = ", ".join(LABELS[r].lower() for r in RULES if r in missing)
+        return (f"Device data is missing for: {labels}. Check the device is being worn and charged; "
+                "tell the nurse if the data stays missing.")
     if level == LEVEL_LOW or not scored_rules:
         return "No extra check suggested; continue routine care."
     steps = "; ".join(AIDE_CHECKS[r] for r in RULES if r in scored_rules)
@@ -290,6 +297,10 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
     rules = [rule_sway(recent, baseline), rule_settle(recent, baseline), rule_night(recent, baseline)]
     score = sum(r["contribution"] for r in rules)
     level = level_for(score, any(r["top_band"] for r in rules))
+    missing = [r["rule"] for r in rules if not r["scored"]]
+    if level == LEVEL_LOW and missing:
+        # No data is not "nothing changed": keep the resident on the list.
+        level = LEVEL_NO_DATA
     present = [d for d in recent + baseline if d is not None]
     card = {
         "resident_id": resident_id,
@@ -298,7 +309,7 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "score": score,
         "level": level,
         "rules": rules,
-        "suggested_check": suggested_check(level, [r["rule"] for r in rules if r["contribution"] > 0]),
+        "suggested_check": suggested_check(level, [r["rule"] for r in rules if r["contribution"] > 0], missing),
         "briefing": "",
         "as_of": as_of.isoformat(),
         "recent_window": {"from": recent_days[0].isoformat(), "to": recent_days[-1].isoformat(), "hours": 48},
@@ -499,7 +510,7 @@ async def seed_synthetic(conn, *, seed: int = DEFAULT_SEED, end_day: Optional[da
                                               d.settle_sway_s, d.settle_hr_s, d.night_restless_min,
                                               d.night_wear_min))
         cards = await evaluate(conn, end_day)
-    flagged = {c["resident_id"] for c in cards if c["level"] != LEVEL_LOW}
+    flagged = {c["resident_id"] for c in cards if c["level"] in FLAGGED}
     changes = [r.id for r in cohort if r.script.expect_flag]
     steady = [r.id for r in cohort if not r.script.expect_flag]
     return {
@@ -551,7 +562,8 @@ async def list_alerts(conn, include_low: bool = False) -> dict:
     q = """SELECT card FROM care_alerts WHERE as_of = (SELECT max(as_of) FROM care_alerts)"""
     if not include_low:
         q += " AND level <> 'low'"
-    order = " ORDER BY CASE level WHEN 'check today' THEN 0 WHEN 'watch' THEN 1 ELSE 2 END, score DESC, resident_id"
+    order = (" ORDER BY CASE level WHEN 'check today' THEN 0 WHEN 'watch' THEN 1 WHEN 'not enough data' THEN 2"
+             " ELSE 3 END, score DESC, resident_id")
     rows = await (await conn.execute(q + order)).fetchall()
     cards = [r["card"] for r in rows]
     out = {"synthetic": True, "notice": NOTICE, "thresholds_status": ASSUMPTION,

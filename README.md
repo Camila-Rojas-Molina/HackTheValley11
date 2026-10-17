@@ -424,10 +424,11 @@ threshold is an untested assumption that each card states.
   - `night_restlessness`: minutes moving at night; both of the last 2 nights must be above their usual,
     so one bad night scores nothing.
 - **Card.** `score` 0–100 is the sum of the rule points (30 + 40 + 30 at most). `level` is `check today`
-  from 45 points or when any rule reaches its top band, `watch` from 15, otherwise `low`. Each rule
-  carries `observed`, `baseline`, `unit`, `contribution` and a plain explanation; the card adds a
-  `suggested_check` for a care aide. `GET /v1/care/alerts` lists `watch` and `check today` cards,
-  `check today` first.
+  from 45 points or when any rule reaches its top band, `watch` from 15, otherwise `low` - or
+  `not enough data` when a rule could not score because the device data stopped, so missing data never
+  reads as "continue routine care". Each rule carries `observed`, `baseline`, `unit`, `contribution`
+  and a plain explanation; the card adds a `suggested_check` for a care aide. `GET /v1/care/alerts`
+  lists `watch`, `check today` and `not enough data` cards, `check today` first.
 - **Briefing (Vultr).** After the score and level are fixed, `GET /v1/care/alerts` sends each `watch` /
   `check today` card's rule findings (no names, no ids) to Vultr Serverless Inference through
   `app.vultr.abriefing`, the async form of `briefing_text`, so the KAZE timer worker never waits on it.
