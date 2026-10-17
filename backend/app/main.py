@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -36,6 +37,27 @@ def _quiet_http_logs() -> None:
     # httpx logs request URLs at INFO, and Bot API URLs contain the token.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+# Capability tokens travel in URL paths (/c/{token}, /v1/contact/{token}/..., /l/{token}).
+_TOKEN_PATH = re.compile(r"(/(?:c|l|v1/contact)/)[^/?#\s\"]+")
+
+
+class RedactTokens(logging.Filter):
+    """Replaces those path tokens with *** in log records (uvicorn's access log in particular)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(_TOKEN_PATH.sub(r"\1***", a) if isinstance(a, str) else a for a in record.args)
+        elif isinstance(record.msg, str):
+            record.msg = _TOKEN_PATH.sub(r"\1***", record.msg)
+        return True
+
+
+def _redact_access_log() -> None:
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, RedactTokens) for f in access.filters):
+        access.addFilter(RedactTokens())
 
 
 async def _db_init(app: FastAPI, settings: Settings) -> bool:
@@ -75,6 +97,7 @@ async def _db_init_retry(app: FastAPI, settings: Settings, stop: asyncio.Event) 
 def create_app(settings: Optional[Settings] = None, *, start_workers: Optional[bool] = None) -> FastAPI:
     settings = settings or get_settings()
     run_workers = settings.run_workers if start_workers is None else start_workers
+    _redact_access_log()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

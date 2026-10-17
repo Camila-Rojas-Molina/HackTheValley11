@@ -36,3 +36,20 @@ async def test_a_server_started_from_env_example_rejects_the_placeholder_keys(pg
             r = await c.post("/v1/hr", json={"source": "x", "bpm": 70},
                              headers={"Authorization": f"Bearer {env['DEVICE_KEY']}", "X-Device-Id": env["DEMO_DEVICE_ID"]})
             assert r.status_code == 401
+
+
+def test_access_log_lines_never_carry_capability_tokens(caplog, settings):
+    import logging
+
+    from app.main import create_app
+    create_app(settings, start_workers=False)  # installs the filter, as scripts/run.py's app does
+    access = logging.getLogger("uvicorn.access")
+    secrets_ = ["InviteTok123", "ContactTok456", "ShareTok789", "PageTok000"]
+    with caplog.at_level(logging.INFO, logger="uvicorn.access"):
+        for path in (f"/v1/contact/{secrets_[0]}/join", f"/v1/contact/{secrets_[1]}/status?x=1",
+                     f"/l/{secrets_[2]}", f"/c/{secrets_[3]}"):
+            access.info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:5555", "GET", path, "1.1", 200)
+        access.info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:5555", "GET", "/v1/health", "1.1", 200)
+    text = caplog.text
+    assert not any(s in text for s in secrets_), text
+    assert "/v1/contact/***/status" in text and "/l/***" in text and "/v1/health" in text
