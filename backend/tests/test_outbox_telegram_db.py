@@ -522,3 +522,39 @@ async def test_poller_lock_of_a_vanished_client_is_released(settings, db, ctx, m
         except Exception:
             pass
     assert calls["p2"] >= 1, "the second poller never got the lock"
+
+
+async def test_rows_claimed_by_a_killed_sender_go_out_right_after_restart(client, db, ctx):
+    from app import outbox as ob
+    w = await make_world(client, db, contacts=1)
+    await to_state(client, db, ctx, w, "ESCALATED_L1")
+    async with db.connection() as conn:
+        await conn.execute("UPDATE outbox SET status = 'sent', channel = 'test-skip' WHERE status = 'pending' "
+                           "AND session_id IS DISTINCT FROM %s", (w.session_id,))
+    dead = Sender(db, ctx)
+    claimed = await ob.claim(db, token=dead.token)
+    assert len(claimed) == 3  # Reminder, Reminder N, the L1 alert
+    # kill -9 here: the rows stay 'sending' with a 30 s lease. A restarted sender sends them now.
+    restarted = Sender(db, ctx)
+    assert await restarted.run_once() == len(claimed)
+    rows = await outbox(db, w.session_id)
+    assert {r["status"] for r in rows} == {"sent"}
+
+
+async def test_a_late_release_cannot_touch_a_row_another_sender_claimed(client, db, ctx):
+    from app import outbox as ob
+    async with db.connection() as conn:
+        row = await (await conn.execute(
+            """INSERT INTO outbox (dedupe_key, recipient, chat_id, purpose, text)
+               VALUES ('claim-token-test', 'chat', 5560, 'x', 'x') RETURNING id""")).fetchone()
+        await conn.execute("UPDATE outbox SET status = 'sent' WHERE status = 'pending' AND id <> %s", (row["id"],))
+    a, b = Sender(db, ctx), Sender(db, ctx)
+    mine_a = [r for r in await ob.claim(db, token=a.token) if r["id"] == row["id"]][0]
+    async with db.connection() as conn:  # a's lease runs out while it is stuck
+        await conn.execute("UPDATE outbox SET locked_until = now() - interval '1 second' WHERE id = %s", (row["id"],))
+    await ob.reap(db)
+    mine_b = [r for r in await ob.claim(db, token=b.token) if r["id"] == row["id"]][0]
+    await ob.release(db, mine_a, 0, "late")  # a wakes up and gives its (expired) claim back
+    async with db.connection() as conn:
+        r = await (await conn.execute("SELECT status, claimed_by FROM outbox WHERE id = %s", (row["id"],))).fetchone()
+    assert r["status"] == "sending" and r["claimed_by"] == b.token and mine_b["claimed_by"] == b.token

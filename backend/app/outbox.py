@@ -2,7 +2,8 @@
 
 Rows are claimed with UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)
 and a 30 s lease (locked_until); a reaper returns stale 'sending' rows to
-'pending'. Network errors, timeouts and 5xx are retried until the outage ends
+'pending', and a starting sender at once returns rows an earlier (killed)
+sender had claimed (claimed_by). Network errors, timeouts and 5xx are retried until the outage ends
 (backoff capped at 60 s); only a permanent 4xx rejection ends as 'failed'. A crash between the provider accepting a message and the row being
 marked 'sent' can therefore send it twice: a deliberate safety trade-off.
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import Optional
 
 import httpx
@@ -63,17 +65,29 @@ async def reap(db) -> int:
         return cur.rowcount
 
 
-async def claim(db, limit: int = 10) -> list[dict]:
+async def reclaim_orphans(db, token: str) -> int:
+    """At sender start: rows another (killed) sender left in 'sending' go back to pending now.
+
+    With two live senders on one database this can resend a row the other is sending: at least
+    once allows that duplicate."""
+    async with db.connection() as conn:
+        cur = await conn.execute(
+            """UPDATE outbox SET status = 'pending', locked_until = NULL
+                WHERE status = 'sending' AND claimed_by IS DISTINCT FROM %s""", (token,))
+        return cur.rowcount
+
+
+async def claim(db, limit: int = 10, token: Optional[str] = None) -> list[dict]:
     async with db.connection() as conn:
         cur = await conn.execute(
             """UPDATE outbox SET status = 'sending', locked_until = now() + make_interval(secs => %s),
-                      attempts = attempts + 1
+                      attempts = attempts + 1, claimed_by = %s
                 WHERE id IN (SELECT id FROM outbox
                               WHERE status = 'pending' AND next_attempt_at <= now()
                               ORDER BY next_attempt_at, id
                               LIMIT %s
                               FOR UPDATE SKIP LOCKED)
-            RETURNING *""", (LEASE_S, limit))
+            RETURNING *""", (LEASE_S, token, limit))
         rows = list(await cur.fetchall())
     rows.sort(key=lambda r: r["id"])
     return rows
@@ -85,7 +99,8 @@ async def mark_sent(db, row: dict, channel: str, provider_id: Optional[str]) -> 
             cur = await conn.execute(
                 """UPDATE outbox SET status = 'sent', sent_at = now(), channel = %s,
                           provider_message_id = %s, locked_until = NULL
-                    WHERE id = %s AND status = 'sending'""", (channel, provider_id, row["id"]))
+                    WHERE id = %s AND status = 'sending' AND claimed_by IS NOT DISTINCT FROM %s""",
+                (channel, provider_id, row["id"], row.get("claimed_by")))
             if cur.rowcount and row.get("timer_id") and row.get("prompt_window_s"):
                 # Prompt deadlines start at delivery.
                 await conn.execute(
@@ -105,8 +120,9 @@ async def release(db, row: dict, delay_s: float, error: Optional[str] = None, co
                       attempts = CASE WHEN %s THEN attempts ELSE greatest(attempts - 1, 0) END,
                       next_attempt_at = now() + make_interval(secs => %s),
                       locked_until = NULL, last_error = coalesce(left(%s, 500), last_error)
-                WHERE id = %s AND status = 'sending'""",
-            (may_fail, count_attempt, MAX_ATTEMPTS, count_attempt, float(delay_s), error, row["id"]))
+                WHERE id = %s AND status = 'sending' AND claimed_by IS NOT DISTINCT FROM %s""",
+            (may_fail, count_attempt, MAX_ATTEMPTS, count_attempt, float(delay_s), error, row["id"],
+             row.get("claimed_by")))
 
 
 async def _chat_id(db, row: dict) -> tuple[Optional[int], str]:
@@ -129,6 +145,8 @@ class Sender:
         self.ctx = ctx
         self.api = api
         self._last_by_chat: dict[int, float] = {}
+        self.token = uuid.uuid4().hex  # this sender's claims
+        self._started = False
 
     async def deliver(self, row: dict) -> str:
         chat_id, fallback = await _chat_id(self.db, row)
@@ -178,8 +196,11 @@ class Sender:
         return "retry"
 
     async def run_once(self) -> int:
+        if not self._started:
+            await reclaim_orphans(self.db, self.token)
+            self._started = True
         await reap(self.db)
-        rows = await claim(self.db)
+        rows = await claim(self.db, token=self.token)
         for row in rows:
             try:
                 await self.deliver(row)
