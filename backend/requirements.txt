@@ -15,6 +15,12 @@ tzdata==2026.5
 # server and the tests run without it (bridge.py --stdin needs no pyserial).
 pyserial==3.5
 
+# Heart-rate bridges on the demo laptop (research 1.14). Optional; the server and the tests run
+# without them. scripts/hr_bleak.py (HeartCast over Bluetooth) needs bleak, which is macOS-only
+# here; scripts/hr_pulsoid.py needs websockets (also pulled in by uvicorn[standard]).
+bleak==3.0.2; sys_platform == "darwin"
+websockets==17.2
+
 # Tests
 pytest==9.1.1
 pytest-asyncio==1.4.0

@@ -221,6 +221,20 @@ that HeartCast broadcasts from the Apple Watch, and posts to `/v1/hr` from the n
 a SIM button that streams `simulated: true`. Open it on `localhost` or over HTTPS (Web Bluetooth needs a
 secure context).
 
+### Headless heart-rate bridges
+
+Two scripts post into the same `POST /v1/hr` with the wearer key (`WEARER_KEY`, `STILLHERE_URL`). Neither
+is tested here against real hardware or a Pulsoid account; their parsers and posting path are unit-tested.
+
+| Script | Source | Path |
+|---|---|---|
+| `scripts/hr_bleak.py` | `heartcast-ble` | HeartCast's Heart Rate Service read with `bleak` on the Mac (primary). Pin the phone with `HR_DEVICE=<uuid>`. |
+| `scripts/hr_pulsoid.py` | `pulsoid-ws` | Pulsoid's WebSocket `wss://dev.pulsoid.net/api/v1/data/real_time`, token `PULSOID_TOKEN` in the `Authorization` header (backup, no Mac Bluetooth). |
+
+Run only one of them, and not with `/hr-bridge`: each refuses to start while another source posted in the
+last 15 s (`GET /v1/hr/status`), unless given `--force`. HeartCast notifies about once a second while the
+Watch updates about every 5 s, so the server never counts repeated notifications as separate readings.
+
 ## 5. Wearer
 
 All calls need `Authorization: Bearer <WEARER_KEY>`.
