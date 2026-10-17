@@ -155,3 +155,32 @@ async def test_a_late_duress_squeeze_does_not_show_in_the_record_while_the_alert
     kinds = [(await client.get("/v1/me/alerts", headers=w.wearer)).json()["alerts"][0]["kind"]
              for w in (plain, squeezed)]
     assert kinds == ["NO_RESPONSE", "NO_RESPONSE"]
+
+
+# --- contacts see no heart rate and no location until an escalation is live (research 1.15) ----------
+async def test_contacts_get_no_heart_rate_ever_and_no_location_before_an_escalation(client, db, ctx):
+    w = await make_world(client, db, contacts=1)
+    c = w.contacts[0]
+    await client.post("/v1/hr", headers=w.wearer, json={"source": "heartcast-ble", "bpm": 91})
+    contact = {"Authorization": f"Bearer {c['token']}"}
+    # Before an alert: nothing about her session, heart rate or location, and no location link exists.
+    before = await client.get(f"/v1/contact/{c['token']}/status")
+    assert before.json() == {"alert": None, "approved": True}
+    async with db.connection() as conn:
+        shares = (await (await conn.execute(
+            """SELECT count(*) AS n FROM location_shares ls JOIN location_snapshots s ON s.id = ls.snapshot_id
+                WHERE s.user_id = %s""", (w.user_id,))).fetchone())["n"]
+    assert shares == 0
+    # Their token opens no heart-rate or telemetry read.
+    for path in ("/v1/hr/status", "/v1/telemetry/zscore", "/v1/telemetry/aggregates", "/v1/me/alerts",
+                 f"/v1/sessions/{w.session_id}"):
+        assert (await client.get(path, headers=contact)).status_code == 401, path
+    # Once the escalation is live: the last-known location, still no heart rate.
+    await to_state(client, db, ctx, w, "ESCALATED_L1")
+    live = (await client.get(f"/v1/contact/{c['token']}/status")).json()["alert"]
+    assert live["location"] and live["location"]["link"].startswith("https://stillhere.test/l/")
+    text = (await client.get(f"/v1/contact/{c['token']}/status")).text.lower()
+    for word in ("bpm", "heart", "hr_", "pulse"):
+        assert word not in text, word
+    msgs = " ".join(r["text"] for r in await outbox(db, w.session_id, contact_id=c["id"])).lower()
+    assert "bpm" not in msgs and "heart" not in msgs
