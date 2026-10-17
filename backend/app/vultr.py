@@ -85,11 +85,16 @@ _BLOCKED = re.compile("|".join(BLOCKED_STEMS), re.IGNORECASE)
 # A briefing restates rule findings. It never names a condition and never predicts a time frame.
 # The second half mirrors the senior-mode card rules (tests/test_care_wording.py CARE_BLOCKLIST):
 # no forward-looking claim and no skin-temperature reading, since the briefing is shown on the card.
+# Plurals and other forms count too ("infections", "UTIs", "falling"), and so does a time frame
+# ("within 2 days", "in the next few days", "tomorrow").
 _NO_CONDITIONS = re.compile(
     r"\b(?:infection|uti|delirium|dementia|parkinson\w*|stroke|sepsis|pneumonia|dehydrat\w*|disease|"
-    r"disorder|syndrome|illness)\b|\b48\s*(?:–|—|-|to)\s*72\b"
+    r"disorder|syndrome|illness)(?:e?s)?\b|\b48\s*(?:–|—|-|to)\s*72\b"
     r"|hypotension|orthostatic|\bpots\b|urinary|septic|syncope|frail|sedat|hydration"
-    r"|predict|forecast|prevent|will fall|\bfalls?\b|\brisk|early warning|\b72\s*h|skin|temperature|fever",
+    r"|predict|forecast|prevent|will fall|\bfall(?:s|ing|en)?\b|\bfell\b|\brisk|early warning|\b72\s*h"
+    r"|\bwithin\s+\d+(?:\.\d+)?\s*(?:h|hrs?|hours?|days?|weeks?)\b"
+    r"|\b(?:in|over)\s+the\s+(?:next|coming)\s+(?:few\s+)?(?:\d+\s+)?(?:hours?|days?|weeks?)\b|\btomorrow\b"
+    r"|skin|temperature|fever",
     re.IGNORECASE)
 _THINK = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")

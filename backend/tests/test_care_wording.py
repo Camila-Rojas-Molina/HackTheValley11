@@ -21,10 +21,12 @@ CARE_BLOCKLIST = (
     # named conditions as conclusions
     r"hypotension", r"orthostatic", r"\bpots\b", r"dehydrat", r"\buti\b", r"urinary", r"sepsis", r"septic",
     r"infection", r"delirium", r"dementia", r"parkinson", r"stroke", r"syncope", r"frail", r"disease",
-    r"disorder", r"sedat", r"hydration",
+    r"disorder", r"sedat", r"hydration", r"pneumonia", r"syndrome", r"illness",
     # forward-looking claims
-    r"predict", r"forecast", r"prevent", r"will fall", r"\bfalls?\b", r"\brisk", r"early warning",
-    r"48\s*[-–—]\s*72", r"\b72\s*h",
+    r"predict", r"forecast", r"prevent", r"will fall", r"\bfalls?\b", r"\bfall(?:ing|en)\b", r"\bfell\b",
+    r"\brisk", r"early warning", r"48\s*[-–—]\s*72", r"\b72\s*h",
+    r"\bwithin\s+\d+\s*(?:h|hrs?|hours?|days?|weeks?)\b", r"\b(?:in|over)\s+the\s+(?:next|coming)\s+(?:few\s+)?(?:\d+\s+)?(?:hours?|days?|weeks?)\b",
+    r"\btomorrow\b",
     # no skin-temperature sensing
     r"skin", r"temperature", r"fever",
 )

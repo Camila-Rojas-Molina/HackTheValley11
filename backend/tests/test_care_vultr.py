@@ -126,6 +126,11 @@ CARE_SAMPLES = [
     "Watch for falls.", "A fall today.", "High risk tonight.", "This is an early warning.",
     "Expect change in 48-72 hours.", "Expect change in 48–72 hours.", "Expect change in 48—72 hours.",
     "Within 72 h.", "Skin looks pale.", "Temperature rose.", "A fever is likely.",
+    # Plural and inflected forms, and forward-looking phrasing without the words above.
+    "These changes are often seen with infections or UTIs.", "This could suggest strokes or other diseases.",
+    "Possible disorders or syndromes or illnesses.", "Pneumonias are common.", "The resident is likely falling.",
+    "The resident has fallen.", "She fell twice.", "Likely to change within 2 days.",
+    "Expect a change in the next few days.", "Check again tomorrow.",
 ]
 
 
@@ -139,3 +144,12 @@ def test_samples_cover_every_care_wording_rule():
 def test_model_text_breaking_the_care_wording_is_refused(text):
     with pytest.raises(vultr.BriefingRejected):
         vultr.accept_text(completion(f"The resident is worth watching. {text} Watch one sit-to-stand."))
+
+
+def test_every_text_the_care_wording_check_flags_is_refused_by_the_briefing_filter():
+    """The two lists must not drift apart: anything CARE_BLOCKLIST flags, accept_text refuses."""
+    corpus = CARE_SAMPLES + [s.lower() for s in CARE_SAMPLES] + [s.upper() for s in CARE_SAMPLES]
+    for text in corpus:
+        if hits(text):
+            with pytest.raises(vultr.BriefingRejected):
+                vultr.accept_text(completion(text))
