@@ -460,3 +460,65 @@ async def test_workers_wait_for_the_app_secret(client, db, ctx, settings):
     # The location link in the alert is the one the server answers with the real secret.
     link = [o for o in await outbox(db, w.session_id, contact_id=w.contacts[0]["id"])][0]["text"].split(": ")[-1]
     assert (await client.get("/l/" + link.rsplit("/l/", 1)[1])).status_code == 200
+
+
+async def test_poller_lock_of_a_vanished_client_is_released(settings, db, ctx, monkeypatch):
+    """A poller whose network path vanished leaves its lock session idle on the server (its close
+    never arrives). The next poller must still take over within a bounded time."""
+    import types
+
+    import psycopg
+    monkeypatch.setattr(telegram, "POLLER_LOCK_IDLE_S", 1, raising=False)
+    monkeypatch.setattr(telegram, "POLLER_LOCK_RETRY_S", 0.3, raising=False)
+    tg_ctx = Ctx(settings=replace(settings, telegram_bot_token="123:TEST"), secret=ctx.secret)
+    orphans = []
+
+    class VanishingConnection:
+        @staticmethod
+        async def connect(*a, **kw):
+            conn = await psycopg.AsyncConnection.connect(*a, **kw)
+
+            async def never_sent():  # the FIN is lost: the server keeps the session
+                return None
+            conn.close = never_sent
+            orphans.append(conn)
+            return conn
+    calls = {"p1": 0, "p2": 0}
+
+    def handler(name):
+        async def h(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("getUpdates"):
+                calls[name] += 1
+            await asyncio.sleep(0.05)
+            return httpx.Response(200, json={"ok": True, "result": []})
+        return h
+    monkeypatch.setattr(telegram, "psycopg", types.SimpleNamespace(
+        AsyncConnection=VanishingConnection, OperationalError=psycopg.OperationalError))
+    stop1 = asyncio.Event()
+    c1 = httpx.AsyncClient(transport=httpx.MockTransport(handler("p1")))
+    p1 = asyncio.create_task(telegram.telegram_poller(db, tg_ctx, stop1, client=c1))
+    for _ in range(50):
+        if calls["p1"]:
+            break
+        await asyncio.sleep(0.1)
+    assert calls["p1"] >= 1
+    stop1.set()
+    await asyncio.wait_for(p1, 10)  # p1 is gone; its lock session is still open on the server
+    monkeypatch.setattr(telegram, "psycopg", psycopg)
+    stop2 = asyncio.Event()
+    c2 = httpx.AsyncClient(transport=httpx.MockTransport(handler("p2")))
+    p2 = asyncio.create_task(telegram.telegram_poller(db, tg_ctx, stop2, client=c2))
+    for _ in range(60):
+        if calls["p2"]:
+            break
+        await asyncio.sleep(0.1)
+    stop2.set()
+    await asyncio.wait_for(p2, 10)
+    for c in (c1, c2):
+        await c.aclose()
+    for conn in orphans:
+        try:
+            await psycopg.AsyncConnection.close(conn)
+        except Exception:
+            pass
+    assert calls["p2"] >= 1, "the second poller never got the lock"

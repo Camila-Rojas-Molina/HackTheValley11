@@ -1,7 +1,9 @@
 """Telegram long-poll bot (the "Reminders" bot).
 
 * Singleton: the poller holds pg_try_advisory_lock on a dedicated connection
-  outside the pool; a second process stays idle until the lock frees.
+  outside the pool; a second process stays idle until the lock frees. The
+  lock session has idle_session_timeout set, so a poller whose client vanished
+  without closing it loses the lock after POLLER_LOCK_IDLE_S.
 * getUpdates(timeout=25, allowed_updates=[message, callback_query]); the offset
   is stored in bot_state in the same transaction that processes the update.
 * /start <token>: binds a contact invite (pending until the wearer approves)
@@ -27,6 +29,10 @@ from .security import sha256_hex
 log = logging.getLogger("stillhere.telegram")
 
 POLLER_LOCK_ID = 7_202_612
+# The lock session is touched every loop. If its client vanished without closing it (a network
+# change loses the FIN), the server ends the idle session after this long and frees the lock.
+POLLER_LOCK_IDLE_S = 120
+POLLER_LOCK_RETRY_S = 15
 OFFSET_KEY = "tg_offset"
 ACTIONS = {
     "ack": (states.CONTACT_ACK, "ack"),
@@ -189,16 +195,23 @@ async def telegram_poller(db, ctx: Ctx, stop: asyncio.Event, client: Optional[ht
             lock_conn = None
             try:
                 lock_conn = await psycopg.AsyncConnection.connect(db.conninfo, autocommit=True)
+                try:
+                    await lock_conn.execute(f"SET idle_session_timeout = '{int(POLLER_LOCK_IDLE_S * 1000)}ms'")
+                except psycopg.OperationalError:
+                    raise
+                except Exception:  # PostgreSQL < 14 has no idle_session_timeout
+                    log.warning("idle_session_timeout unavailable; a vanished poller keeps the lock longer")
                 got = (await (await lock_conn.execute("SELECT pg_try_advisory_lock(%s)",
                                                       (POLLER_LOCK_ID,))).fetchone())[0]
                 if not got:
                     log.info("another process holds the Telegram poller lock; waiting")
-                    await _wait(stop, 15)
+                    await _wait(stop, POLLER_LOCK_RETRY_S)
                     continue
                 if not webhook_cleared:
                     await api.call("deleteWebhook", {})
                     webhook_cleared = True
                 while not stop.is_set():
+                    await lock_conn.execute("SELECT 1")  # the lock session is alive (and not idle)
                     async with db.connection() as conn:
                         offset = await get_offset(conn)
                     res = await api.call("getUpdates", {"offset": offset, "timeout": 25,
@@ -217,7 +230,6 @@ async def telegram_poller(db, ctx: Ctx, stop: asyncio.Event, client: Optional[ht
                         ans = await handle_update(db, ctx, upd)
                         if ans:
                             await api.call("answerCallbackQuery", ans)
-                    await lock_conn.execute("SELECT 1")  # the lock connection is still alive
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
