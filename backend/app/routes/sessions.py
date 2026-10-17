@@ -226,6 +226,49 @@ async def export(request: Request):
                 "note": "Hash-chained: any edit after export breaks the chain when it is recomputed."}
 
 
+@router.get("/v1/me/alerts")
+async def my_alerts(request: Request):
+    """The wearer's record of who was alerted and who acknowledged, per alert (research 1.15). An open
+    masked (duress) alert is left out until it closes, exactly like its timeline entries, so the reply
+    after a duress PIN is the same bytes as after the real PIN; an open unmasked one (a duress squeeze
+    during a no-response alert) reads as no-response until it closes."""
+    db = get_db(request)
+    async with db.connection() as conn:
+        user = await require_wearer(request, conn)
+        alerts = await (await conn.execute(
+            """SELECT a.id, a.session_id, a.status, a.level, a.is_final, a.resolved_by, a.opened_at, a.closed_at,
+                      -- An open duress alert that is not masked (a duress squeeze during a no-response
+                      -- alert) reads as the no-response alert she can see, until it closes.
+                      CASE WHEN a.kind = 'DURESS' AND a.status IN ('OPEN', 'ACKED') THEN 'NO_RESPONSE'
+                           ELSE a.kind END AS kind
+                 FROM alerts a JOIN sessions s ON s.id = a.session_id
+                WHERE s.user_id = %s AND NOT (a.masked AND a.status IN ('OPEN', 'ACKED'))
+                ORDER BY a.opened_at DESC, a.id DESC""", (user["id"],))).fetchall()
+        ids = [a["id"] for a in alerts]
+        told = await (await conn.execute(
+            """SELECT r.alert_id, r.contact_id, c.name, r.first_notified_at FROM alert_recipients r
+                 JOIN contacts c ON c.id = r.contact_id
+                WHERE r.alert_id = ANY(%s) ORDER BY r.first_notified_at, r.contact_id""", (ids,))).fetchall()
+        acks = await (await conn.execute(
+            """SELECT k.alert_id, k.contact_id, c.name, k.action, k.source, k.result, k.at FROM acks k
+                 JOIN contacts c ON c.id = k.contact_id
+                WHERE k.alert_id = ANY(%s) ORDER BY k.at, k.id""", (ids,))).fetchall()
+    out = []
+    for a in alerts:
+        out.append({
+            "alert_id": a["id"], "session_id": str(a["session_id"]), "kind": a["kind"], "status": a["status"],
+            "level": a["level"], "final": bool(a["is_final"]), "resolved_by": a["resolved_by"],
+            "opened_at": a["opened_at"].isoformat(), "closed_at": a["closed_at"].isoformat() if a["closed_at"] else None,
+            "alerted": [{"contact_id": r["contact_id"], "name": r["name"],
+                         "first_notified_at": r["first_notified_at"].isoformat()}
+                        for r in told if r["alert_id"] == a["id"]],
+            "acknowledged": [{"contact_id": k["contact_id"], "name": k["name"], "action": k["action"],
+                              "source": k["source"], "result": k["result"], "at": k["at"].isoformat()}
+                             for k in acks if k["alert_id"] == a["id"]],
+        })
+    return canonical_json({"alerts": out})
+
+
 @router.delete("/v1/me/data")
 async def erase(request: Request):
     """Delete my data: timeline, locations, raw heart rate and raw scrunchie telemetry. Leaves a tombstone."""

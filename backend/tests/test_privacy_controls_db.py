@@ -101,3 +101,57 @@ async def test_the_simulated_demo_location_is_not_personal_data_and_stays(client
                            "WHERE user_id = %s", (w.user_id,))
         await engine.purge_locations(conn)
     assert len(await snapshots(db, w.user_id)) == 1
+
+
+# --- the wearer's record of who was alerted and who acknowledged -----------------------------------
+from tests.conftest import DURESS_PIN, PIN, deliver_all  # noqa: E402
+
+
+async def test_record_lists_who_was_alerted_and_who_acknowledged(client, db, ctx):
+    w = await make_world(client, db, contacts=2)
+    c1, c2 = w.contacts
+    await to_state(client, db, ctx, w, "ESCALATED_L1")
+    assert (await client.post(f"/v1/contact/{c1['token']}/ack")).json()["result"] == "acked"
+    body = (await client.get("/v1/me/alerts", headers=w.wearer)).json()
+    assert len(body["alerts"]) == 1
+    a = body["alerts"][0]
+    assert a["kind"] == "NO_RESPONSE" and a["status"] == "ACKED" and a["session_id"] == w.session_id
+    assert [(r["contact_id"], r["name"]) for r in a["alerted"]] == [(c1["id"], "C1")]
+    assert [(k["contact_id"], k["name"], k["action"], k["source"]) for k in a["acknowledged"]] == \
+        [(c1["id"], "C1", "ack", "web")]
+    assert a["alerted"][0]["first_notified_at"] and a["acknowledged"][0]["at"]
+
+
+async def test_record_hides_an_open_masked_duress_alert_like_the_timeline(client, db, ctx):
+    real = await make_world(client, db, contacts=1)
+    duress = await make_world(client, db, contacts=1)
+    await client.post(f"/v1/sessions/{real.session_id}/cancel", headers=real.wearer, json={"pin": PIN})
+    await client.post(f"/v1/sessions/{duress.session_id}/cancel", headers=duress.wearer, json={"pin": DURESS_PIN})
+    a = await client.get("/v1/me/alerts", headers=real.wearer)
+    b = await client.get("/v1/me/alerts", headers=duress.wearer)
+    assert a.status_code == b.status_code == 200 and a.content == b.content       # byte-identical: no alerts
+    # Once "she's safe" closes it, the duress alert joins her record, as its timeline entries do.
+    c = duress.contacts[0]
+    await client.post(f"/v1/contact/{c['token']}/ack")
+    await client.post(f"/v1/contact/{c['token']}/followup", json={"action": "safe"})
+    alerts = (await client.get("/v1/me/alerts", headers=duress.wearer)).json()["alerts"]
+    assert [(x["kind"], x["status"]) for x in alerts] == [("DURESS", "RESOLVED")]
+    assert [k["action"] for k in alerts[0]["acknowledged"]] == ["ack", "safe"]
+
+
+async def test_record_needs_the_wearer_key(client):
+    assert (await client.get("/v1/me/alerts")).status_code == 401
+
+
+async def test_a_late_duress_squeeze_does_not_show_in_the_record_while_the_alert_is_open(client, db, ctx):
+    """A duress squeeze during a no-response alert upgrades it without masking it. Her record keeps
+    calling it a no-response alert until it closes, as her timeline hides the duress entry."""
+    plain, squeezed = await make_world(client, db, contacts=1), await make_world(client, db, contacts=1)
+    for w, pattern in ((plain, "plain"), (squeezed, "duress")):
+        await to_state(client, db, ctx, w, "ESCALATED_L1")
+        r = await client.post("/v1/device/events", headers=w.device(),
+                              json={"event_id": "b1:900", "type": "squeeze", "payload": {"pattern": pattern, "k": 2}})
+        assert r.status_code == 200
+    kinds = [(await client.get("/v1/me/alerts", headers=w.wearer)).json()["alerts"][0]["kind"]
+             for w in (plain, squeezed)]
+    assert kinds == ["NO_RESPONSE", "NO_RESPONSE"]

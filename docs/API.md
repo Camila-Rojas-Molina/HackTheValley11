@@ -337,6 +337,21 @@ characters.
  "note": "Hash-chained: any edit after export breaks the chain when it is recomputed."}
 ```
 
+### `GET /v1/me/alerts`
+
+Wearer key. Her record of every alert: who was alerted (`alerted`, with when each contact was first told)
+and who acknowledged or answered (`acknowledged`: `ack`, `pass`, `safe`, `cant_reach`, with the source and
+the result). Newest first. Masking follows the timeline: an open masked duress alert is left out until it
+closes (so the reply after a duress PIN is the same bytes as after the real PIN), and an open duress alert
+that is not masked (a duress squeeze during a no-response alert) reads as `NO_RESPONSE` until it closes.
+
+```json
+{"alerts":[{"acknowledged":[{"action":"ack","at":"2026-10-17T11:20:03.1+00:00","contact_id":12,"name":"Sam",
+  "result":"acked","source":"web"}],"alert_id":7,"alerted":[{"contact_id":12,"first_notified_at":"2026-10-17T11:19:51.0+00:00",
+  "name":"Sam"}],"closed_at":null,"final":false,"kind":"NO_RESPONSE","level":1,"opened_at":"2026-10-17T11:19:51.0+00:00",
+  "resolved_by":null,"session_id":"…","status":"ACKED"}]}
+```
+
 ### `DELETE /v1/me/data`
 
 Deletes the wearer's timeline, location snapshots, raw heart rate and raw scrunchie telemetry (with its
