@@ -45,11 +45,12 @@ def flat_days(**recent_kw) -> list[care.DayMetrics]:
 
 
 # --- the synthetic cohort ------------------------------------------------------------------------
-def test_cohort_is_20_residents_by_14_days_all_synthetic():
+def test_cohort_is_20_residents_by_28_days_all_synthetic():
     cohort = care.generate_cohort(care.DEFAULT_SEED, END)
     assert len(cohort) == 20 and len({r.id for r in cohort}) == 20
+    assert care.RECORD_DAYS == 28
     for r in cohort:
-        assert len(r.days) == 14 and r.days[-1].day == END and r.days[0].day == END - timedelta(days=13)
+        assert len(r.days) == 28 and r.days[-1].day == END and r.days[0].day == END - timedelta(days=27)
         assert all(d.synthetic for d in r.days)
         assert r.display_name.startswith("Synthetic resident ")
     names = [r.script.name for r in cohort]
@@ -158,9 +159,10 @@ def test_every_card_meets_the_shared_contract():
 def test_raw_numbers_behind_each_rule_are_on_the_card():
     for _, card in scored():
         for r in card["rules"]:
-            assert len(r["recent_values"]) == 2 and len(r["baseline_values"]) == 2
+            assert len(r["recent_values"]) == 2 and len(r["baseline_values"]) == care.BASELINE_DAYS
             assert r["observed"] == pytest.approx(sum(r["recent_values"]) / 2, abs=0.6)
-            assert r["baseline"] == pytest.approx(sum(r["baseline_values"]) / 2, abs=0.6)
+            n = len(r["baseline_values"])
+            assert r["baseline"] == pytest.approx(sum(r["baseline_values"]) / n, abs=0.6)
         settle = rule(card, care.SETTLE)
         assert set(settle["components"]) == {"balance_s", "heart_rate_s"}       # accelerometer + heart rate
         assert settle["stand_ups"]["recent"] >= care.MIN_STAND_UPS
@@ -295,3 +297,57 @@ def test_settle_not_enough_data_text_states_the_rule_it_applies():
     assert "8+ stand-ups on both days" not in r["explanation"]  # that is not the rule
     four_and_four = [replace(d, stand_ups=4) if d.day >= END - timedelta(days=1) else d for d in base]
     assert rule(care.score_resident("X", "X", four_and_four, END), care.SETTLE)["scored"] is True
+
+
+# --- research 1.3: rolling 14-day baseline, 7 valid days of warm-up, 28-day record -----------------
+def test_baseline_is_the_14_days_just_before_the_recent_window():
+    recent, baseline = care.windows(END)
+    assert recent == [END - timedelta(days=1), END]
+    assert baseline == [END - timedelta(days=15 - i) for i in range(14)]
+    assert care.BASELINE_DAYS == 14 and care.WARMUP_DAYS == 7
+
+
+def test_days_before_the_rolling_baseline_do_not_count():
+    days = flat_days()
+    early = [replace(d, settle_s=90.0, night_restless_min=300.0, sway_rms=0.5) if d.day < END - timedelta(days=15)
+             else d for d in days]
+    a = care.score_resident("X", "X", days, END)
+    b = care.score_resident("X", "X", early, END)
+    assert a == b
+
+
+@pytest.mark.parametrize("valid,scores", [(6, False), (7, True), (14, True)])
+def test_no_rule_can_fire_before_7_valid_baseline_days(valid, scores):
+    """Warm-up (Rispens 2015: one week gives stable gait measures): fewer than 7 valid days in the
+    baseline window means the rule does not score, however large the change."""
+    days = flat_days(settle_s=60.0, night_restless_min=200.0)
+    _, baseline = care.windows(END)
+    keep = set(baseline[len(baseline) - valid:])
+    days = [d for d in days if d.day >= END - timedelta(days=1) or d.day in keep]
+    card = care.score_resident("X", "Synthetic resident X", days, END)
+    for r in card["rules"]:
+        assert r["scored"] is scores, r
+        assert r["baseline_days"] == valid
+        if not scores:
+            assert "warm-up" in r["explanation"] and f"{valid} of 7" in r["explanation"]
+    assert (card["level"] == care.LEVEL_NO_DATA) is not scores
+    assert (card["score"] > 0) is scores
+
+
+def test_scripted_changes_start_after_the_warm_up():
+    for script in care.SCRIPTS.values():
+        for onset, ramp in ((script.onset, script.settle_per_day or script.sway_per_day),
+                            (script.night_onset, script.night_per_day)):
+            if ramp:
+                assert onset >= care.WARMUP_DAYS + care.WINDOW_DAYS, (script.name, onset)
+        if script.bad_night_day is not None:
+            assert script.bad_night_day >= care.RECORD_DAYS - care.WINDOW_DAYS, script.name
+
+
+def test_card_names_the_rolling_baseline():
+    card = care.score_cohort(care.generate_cohort(care.DEFAULT_SEED, END), END)[0]
+    bw = card["baseline_window"]
+    assert bw["days"] == 14 and bw["from"] == (END - timedelta(days=15)).isoformat()
+    assert bw["to"] == (END - timedelta(days=2)).isoformat()
+    assert "rolling" in bw["note"] and "7 valid days" in bw["note"]
+    assert card["data_quality"]["days_expected"] == 16

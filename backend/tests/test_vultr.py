@@ -417,4 +417,4 @@ def test_cli_check_uses_a_card_the_rule_engine_produces():
 
 def test_template_briefing_does_not_call_the_baseline_recent():
     text = vultr.template_briefing(vultr.sample_card())
-    assert "recent baseline" not in text and "baseline from the start of the record" in text
+    assert "recent baseline" not in text and "own baseline over the 14 days before the last 48 h" in text

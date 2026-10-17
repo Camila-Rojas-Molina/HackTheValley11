@@ -218,7 +218,7 @@ def template_briefing(card: Mapping) -> str:
         check = card.get("suggested_check")
         if isinstance(check, str) and check.strip():
             text += f" Suggested check: {check.strip().rstrip('.')}."
-        text += (" This compares the resident with their own baseline from the start of the record; "
+        text += (" This compares the resident with their own baseline over the 14 days before the last 48 h; "
                  "it is not a medical assessment.")
         return text
     except Exception:  # a malformed card must never break the care page

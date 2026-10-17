@@ -9,7 +9,7 @@ GET  /v1/care/alerts      latest alert cards at level "watch" or "check today": 
                           Inference when VULTR_API_KEY is set (app/vultr.py); briefing_source says
                           which text is shown: "vultr", or "template" (care.local_briefing).
 POST /v1/demo/care-seed   X-Admin-Key. Body optional: {seed, end_day}. Replaces the synthetic cohort
-                          (20 residents x 14 days, ending end_day, default yesterday UTC) and scores it.
+                          (20 residents x 28 days, ending end_day, default yesterday UTC) and scores it.
 
 The reads need no key because every row is synthetic (a CHECK constraint enforces it); put
 them behind auth before any real resident data goes in. Card shape:

@@ -72,12 +72,12 @@ async def test_seed_needs_the_admin_key(client, db):
 async def test_seed_scores_the_cohort_and_touches_no_kaze_table(client, db):
     before = await kaze_counts(db)
     body = await seed(client)
-    assert body["synthetic"] is True and body["residents"] == 20 and body["days"] == 14 and body["rows"] == 280
+    assert body["synthetic"] is True and body["residents"] == 20 and body["days"] == 28 and body["rows"] == 560
     assert body["as_of"] == END.isoformat()
     assert body["scripted_change"] == {"residents": 5, "flagged": 5}
     assert body["no_change_scripts"] == {"residents": 15, "flagged": 0}
     assert sum(body["levels"].values()) == 20 and body["levels"]["low"] == 15
-    assert await care_counts(db) == {"residents": 20, "metrics": 280, "alerts": 20}
+    assert await care_counts(db) == {"residents": 20, "metrics": 560, "alerts": 20}
     await client.get("/v1/care/residents")
     await client.get("/v1/care/alerts?include_low=true")
     assert await kaze_counts(db) == before
@@ -135,7 +135,7 @@ async def test_residents_list_shows_level_and_the_script_separately(client):
     rows = body["residents"]
     assert [r["resident_id"] for r in rows] == [f"R-{i:02d}" for i in range(1, 21)]
     for r in rows:
-        assert r["synthetic"] is True and r["days_of_data"] == 14 and r["as_of"] == END.isoformat()
+        assert r["synthetic"] is True and r["days_of_data"] == 28 and r["as_of"] == END.isoformat()
         assert r["script"]["read_by_rules"] is False
         assert (r["level"] != "low") == (r["script"]["expected"] == "flag"), r
 
@@ -143,11 +143,11 @@ async def test_residents_list_shows_level_and_the_script_separately(client):
 async def test_reseed_replaces_the_cohort(client, db):
     await seed(client)
     await seed(client)
-    assert await care_counts(db) == {"residents": 20, "metrics": 280, "alerts": 20}
+    assert await care_counts(db) == {"residents": 20, "metrics": 560, "alerts": 20}
     later = END + timedelta(days=3)
     body = await seed(client, seed=4, end_day=later.isoformat())
     assert body["as_of"] == later.isoformat()
-    assert await care_counts(db) == {"residents": 20, "metrics": 280, "alerts": 20}
+    assert await care_counts(db) == {"residents": 20, "metrics": 560, "alerts": 20}
     assert (await client.get("/v1/care/alerts")).json()["as_of"] == later.isoformat()
 
 
@@ -155,7 +155,7 @@ async def test_concurrent_seeds_serialise(client, db):
     results = await asyncio.gather(*(client.post("/v1/demo/care-seed", json={"seed": s, "end_day": END.isoformat()},
                                                  headers=ADMIN) for s in (1, 2, 3)))
     assert [r.status_code for r in results] == [200, 200, 200]
-    assert await care_counts(db) == {"residents": 20, "metrics": 280, "alerts": 20}
+    assert await care_counts(db) == {"residents": 20, "metrics": 560, "alerts": 20}
 
 
 async def test_seed_defaults_to_yesterday(client):

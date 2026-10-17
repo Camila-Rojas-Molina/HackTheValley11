@@ -4,7 +4,7 @@ Separate from the KAZE check-in path: this module imports nothing from it, write
 the care_* tables and sends no messages. Plain code decides every score and level; no
 model takes part. The briefing text is written from the finished card afterwards.
 
-Data. generate_cohort() makes 20 synthetic residents x 14 days. Every resident and every
+Data. generate_cohort() makes 20 synthetic residents x 28 days. Every resident and every
 row is labelled synthetic. Seven residents follow a scripted gradual change; the rest are
 no-change scripts: stable residents, a one-off bad night, and residents whose usual values
 are simply high. The script is ground truth for checking the rules; the rules never read it.
@@ -17,8 +17,10 @@ Rules. Each compares a resident with their own baseline, never with other reside
 Postural sway is shown on the card greyed out, "experimental, not scored" (research 1.1):
 traditional sway measures were not associated with the outcome studied in 738 older adults
 (Zhou 2017, PMC5462759), and sway measured at the wrist or in the hair is not validated.
-The baseline is the first 48 h of the 14-day record. 48 h is short: day-to-day variation
-in older adults is large, so a longer baseline would be steadier once more data exists.
+Baseline (research 1.3): rolling, the 14 days just before the recent 48 h (Skubic 2015,
+PMC4848095: "two weeks immediately before the day examined"), so the recent window never
+compares with itself. A rule needs 7 valid days in that baseline before it can score at all
+(warm-up; Rispens 2015: one week of daily-life data gave stable gait measures, ICC > 0.75).
 The generator's day-to-day variation is a chosen demo value and the scripted changes are
 large next to it; real data will be noisier, and how early a change shows up here comes
 from the script, not from any study.
@@ -51,11 +53,13 @@ FLAGGED = (LEVEL_WATCH, LEVEL_CHECK)
 
 DEFAULT_SEED = 11
 RESIDENT_COUNT = 20
-RECORD_DAYS = 14
+RECORD_DAYS = 28                # research 1.3: at least 21 days; 28 gives a full baseline + room
 SEED_LOCK_ID = 7_202_612  # advisory lock: one cohort seed at a time
 
 # --- thresholds: every value below is an untested assumption -------------------------
-WINDOW_DAYS = 2                 # "last 48 h" and "own 48 h baseline"
+WINDOW_DAYS = 2                 # the recent window: the last 48 h
+BASELINE_DAYS = 14              # rolling baseline: the 14 days before the recent window (Skubic 2015)
+WARMUP_DAYS = 7                 # valid baseline days before any rule can score (Rispens 2015)
 MIN_WEAR_HOURS = 6.0            # a day counts for sway only if worn this long
 MIN_STAND_UPS = 8               # stand-ups needed in each 48 h window
 MIN_NIGHT_WEAR_MIN = 240.0      # a night counts only if worn this long (of 420 min)
@@ -69,8 +73,10 @@ WATCH_FROM = 15
 CHECK_TODAY_FROM = 45
 
 THRESHOLDS = {
-    SETTLE: "+25% -> 25, +40% -> 40, +60% -> 55 points, and at least 5 s slower; 8+ stand-ups per 48 h",
-    NIGHT: "both of the last 2 nights +50% -> 25, +100% -> 45 points, and at least 15 min above; nights worn 4 h+",
+    SETTLE: ("+25% -> 25, +40% -> 40, +60% -> 55 points, and at least 5 s slower; 8+ stand-ups per 48 h; "
+             "7+ valid days in the 14-day baseline"),
+    NIGHT: ("both of the last 2 nights +50% -> 25, +100% -> 45 points, and at least 15 min above; nights worn 4 h+; "
+            "7+ valid nights in the 14-day baseline"),
     "levels": ("watch from 15 points; check today from 45 points or any rule in its top band; "
                "not enough data below 15 points when a rule could not score"),
 }
@@ -145,6 +151,7 @@ def _rule(rule: str, unit: str, digits: int, recent: Sequence[float], baseline: 
         "top_band": False,
         "recent_values": [round(v, digits) if digits else round(v) for v in recent],
         "baseline_values": [round(v, digits) if digits else round(v) for v in baseline],
+        "baseline_days": len(baseline),
         "threshold": THRESHOLDS[rule],
         "threshold_status": ASSUMPTION,
     }
@@ -152,6 +159,12 @@ def _rule(rule: str, unit: str, digits: int, recent: Sequence[float], baseline: 
 
 def _not_enough(out: dict, need: str) -> dict:
     out["explanation"] = f"Not enough data to compare ({need}); this rule did not score."
+    return out
+
+
+def _warming_up(out: dict, valid: int, what: str) -> dict:
+    out["explanation"] = (f"Not enough data to compare (warm-up: {valid} of {WARMUP_DAYS} valid {what} in the "
+                          f"14-day baseline); this rule did not score.")
     return out
 
 
@@ -179,7 +192,9 @@ def rule_settle(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Optio
     out = _rule(SETTLE, "s", 1, [d.settle_s for d in r], [d.settle_s for d in b])
     n_r, n_b = sum(d.stand_ups for d in r), sum(d.stand_ups for d in b)
     out["stand_ups"] = {"recent": n_r, "baseline": n_b}
-    if len(r) < WINDOW_DAYS or len(b) < WINDOW_DAYS or n_r < MIN_STAND_UPS or n_b < MIN_STAND_UPS:
+    if len(b) < WARMUP_DAYS:
+        return _warming_up(out, len(b), "days")
+    if len(r) < WINDOW_DAYS or n_r < MIN_STAND_UPS:
         return _not_enough(out, f"needs stand-ups on both days and {MIN_STAND_UPS}+ stand-ups per 48 h window")
     obs, base = _mean([d.settle_s for d in r]), _mean([d.settle_s for d in b])
     if base <= 0:
@@ -198,8 +213,9 @@ def rule_settle(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Optio
         points = 0
     out.update(observed=round(obs, 1), baseline=round(base, 1), change_pct=_pct(change), scored=True,
                contribution=points, top_band=points == SETTLE_BANDS[0][1])
-    head = (f"After standing up, balance and heart rate took {obs:.0f} s to settle vs {base:.0f} s in their "
-            f"own 48 h baseline ({_pct(change):+d}%; {n_r} and {n_b} stand-ups)")
+    head = (f"After standing up, balance and heart rate took {obs:.0f} s to settle over the last 48 h vs "
+            f"{base:.0f} s in their own 14-day baseline ({_pct(change):+d}%; {n_r} stand-ups recently, "
+            f"{len(b)} baseline days)")
     if points:
         out["explanation"] = f"{head}; at or above the +{_pct(cut)}% band, {points} points."
     elif small:
@@ -216,8 +232,10 @@ def rule_night(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Option
 
     r, b = nights(recent), nights(baseline)
     out = _rule(NIGHT, "min", 0, r, b)
-    if len(r) < WINDOW_DAYS or len(b) < WINDOW_DAYS or _mean(b) <= 0:
-        return _not_enough(out, f"needs {WINDOW_DAYS} nights worn {MIN_NIGHT_WEAR_MIN / 60:g} h+ in each window")
+    if len(b) < WARMUP_DAYS:
+        return _warming_up(out, len(b), "nights")
+    if len(r) < WINDOW_DAYS or _mean(b) <= 0:
+        return _not_enough(out, f"needs both of the last {WINDOW_DAYS} nights worn {MIN_NIGHT_WEAR_MIN / 60:g} h+")
     base = _mean(b)
     obs = _mean(r)
 
@@ -232,15 +250,15 @@ def rule_night(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Option
     n_above = sum(1 for x in r if above(x))
     if points:
         out["explanation"] = (f"More movement at night than usual on both of the last 2 nights ({shown} min vs "
-                              f"{base:.0f} min in their own baseline); each night at or above the "
+                              f"{base:.0f} min in their own 14-day baseline); each night at or above the "
                               f"+{_pct(cut)}% band, {points} points.")
     elif n_above == 1:
         out["explanation"] = (f"One of the last 2 nights had more movement than usual ({shown} min vs "
-                              f"{base:.0f} min in their own baseline). This rule needs 2 nights in a row, "
+                              f"{base:.0f} min in their own 14-day baseline). This rule needs 2 nights in a row, "
                               f"so no points.")
     else:
         out["explanation"] = (f"Movement at night over the last 2 nights: {shown} min vs {base:.0f} min in "
-                              f"their own baseline; no points.")
+                              f"their own 14-day baseline; no points.")
     return out
 
 
@@ -283,10 +301,10 @@ def local_briefing(card: dict) -> str:
 
 
 def windows(as_of: date) -> tuple[list[date], list[date]]:
-    """(recent, baseline) days: the last 48 h, and the first 48 h of the 14-day record."""
+    """(recent, baseline) days: the last 48 h, and the 14 days just before them (rolling)."""
     recent = [as_of - timedelta(days=i) for i in range(WINDOW_DAYS - 1, -1, -1)]
-    first = as_of - timedelta(days=RECORD_DAYS - 1)
-    baseline = [first + timedelta(days=i) for i in range(WINDOW_DAYS)]
+    first = recent[0] - timedelta(days=BASELINE_DAYS)
+    baseline = [first + timedelta(days=i) for i in range(BASELINE_DAYS)]
     return recent, baseline
 
 
@@ -318,10 +336,12 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "as_of": as_of.isoformat(),
         "recent_window": {"from": recent_days[0].isoformat(), "to": recent_days[-1].isoformat(), "hours": 48},
         "baseline_window": {"from": baseline_days[0].isoformat(), "to": baseline_days[-1].isoformat(),
-                            "hours": 48, "note": "their own first 48 h in this 14-day record"},
+                            "days": BASELINE_DAYS,
+                            "note": (f"rolling: their own {BASELINE_DAYS} days just before the last 48 h; "
+                                     f"{WARMUP_DAYS} valid days needed before a rule can score (warm-up)")},
         "data_quality": {
             "days_present": len(present),
-            "days_expected": 2 * WINDOW_DAYS,
+            "days_expected": WINDOW_DAYS + BASELINE_DAYS,
             "wear_hours": round(sum(d.wear_hours for d in present), 1),
             "all_rules_scored": all(r["scored"] for r in rules),
         },
@@ -355,25 +375,27 @@ class Script:
 SCRIPTS: dict[str, Script] = {s.name: s for s in (
     Script("stable", "No scripted change; day-to-day variation only.", False),
     # Sway is experimental (research 1.1): these drifts are shown on the card and score nothing.
-    Script("sway_drift", "Standing sway rises 5% of usual a day from day 5 (shown, not scored).", False,
-           onset=4, sway_per_day=0.05),
-    Script("sway_drift_steep", "Standing sway rises 7% of usual a day from day 4 (shown, not scored).", False,
-           onset=3, sway_per_day=0.07),
-    Script("slower_settle", "Settling after standing up slows 6% of usual a day from day 6.", True, (SETTLE,),
-           onset=5, settle_per_day=0.06),
-    Script("slower_settle_steep", "Settling after standing up slows 8.5% of usual a day from day 5.", True,
-           (SETTLE,), onset=4, settle_per_day=0.085),
-    Script("night_restless", "Night-time movement rises 20% of usual a night from night 6.", True, (NIGHT,),
-           night_onset=5, night_per_day=0.20),
-    Script("clustered", "Sway and settling time rise gradually from day 5, night-time movement from night 6.",
-           True, (SETTLE, NIGHT), onset=4, sway_per_day=0.05, settle_per_day=0.06,
-           night_onset=5, night_per_day=0.18),
-    Script("clustered_mild", "Sway rises gradually from day 5, night-time movement from night 6.", True,
-           (NIGHT,), onset=4, sway_per_day=0.045, night_onset=5, night_per_day=0.15),
-    Script("one_off_bad_night", "One bad night before day 13 (3x usual movement), then back to usual.", False,
-           bad_night_day=12),
-    Script("one_off_bad_night_last", "One bad night before day 14 (3x usual movement).", False,
-           bad_night_day=13),
+    Script("sway_drift", "Standing sway rises 5% of usual a day from day 22 (shown, not scored).", False,
+           onset=21, sway_per_day=0.05),
+    Script("sway_drift_steep", "Standing sway rises 7% of usual a day from day 21 (shown, not scored).", False,
+           onset=20, sway_per_day=0.07),
+    # Changes start after the warm-up and late in the record: a rolling baseline absorbs a slow
+    # drift that has been going on for most of its 14 days (research 1.3).
+    Script("slower_settle", "Settling after standing up slows 8% of usual a day from day 22.", True, (SETTLE,),
+           onset=21, settle_per_day=0.08),
+    Script("slower_settle_steep", "Settling after standing up slows 9% of usual a day from day 22.", True,
+           (SETTLE,), onset=21, settle_per_day=0.09),
+    Script("night_restless", "Night-time movement rises 30% of usual a night from night 24.", True, (NIGHT,),
+           night_onset=23, night_per_day=0.30),
+    Script("clustered", "Sway and settling time rise gradually from day 22, night-time movement from night 24.",
+           True, (SETTLE, NIGHT), onset=21, sway_per_day=0.05, settle_per_day=0.08,
+           night_onset=23, night_per_day=0.30),
+    Script("clustered_mild", "Sway rises gradually from day 22, night-time movement from night 24.", True,
+           (NIGHT,), onset=21, sway_per_day=0.045, night_onset=23, night_per_day=0.28),
+    Script("one_off_bad_night", "One bad night before day 27 (3x usual movement), then back to usual.", False,
+           bad_night_day=26),
+    Script("one_off_bad_night_last", "One bad night before day 28 (3x usual movement).", False,
+           bad_night_day=27),
     Script("high_usual", "Naturally high sway, slow settling and restless nights; all steady.", False,
            high_usual=True),
 )}
@@ -497,7 +519,7 @@ async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
 
 
 async def seed_synthetic(conn, *, seed: int = DEFAULT_SEED, end_day: Optional[date] = None) -> dict:
-    """Replace the synthetic cohort (20 residents x 14 days), then score it. One transaction."""
+    """Replace the synthetic cohort (20 residents x 28 days), then score it. One transaction."""
     end_day = end_day or default_end_day()
     cohort = generate_cohort(seed, end_day)
     async with conn.transaction():
