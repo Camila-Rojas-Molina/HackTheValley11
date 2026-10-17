@@ -26,6 +26,7 @@ from .outbox import outbox_sender
 from .routes import contacts, demo, device, health, hr, sessions
 from .telegram import telegram_poller
 from .timers import timer_worker
+from .routes import telemetry
 
 log = logging.getLogger("stillhere")
 
@@ -111,6 +112,7 @@ def create_app(settings: Optional[Settings] = None, *, start_workers: Optional[b
     async def _db_down(request: Request, exc: OperationalError):
         return JSONResponse({"ok": False, "error": "database unavailable"}, status_code=503)
 
+    app.include_router(telemetry.router)
     for r in (health.router, device.router, hr.router, sessions.router, contacts.router, demo.router):
         app.include_router(r)
     return app
