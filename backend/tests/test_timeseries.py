@@ -489,3 +489,29 @@ async def test_zscore_rows_never_carry_nan_toolkit_one_minute_baseline(client, d
             await conn.execute("DROP VIEW pg_temp.user_zscore_5m")
     assert rows[0]["baseline_sd"] is None
     _json.dumps(rows, allow_nan=False)  # what Starlette's JSONResponse does
+
+
+async def test_same_batch_id_from_two_senders_of_one_wearer_is_stored_twice(client, db, ctx):
+    from app.security import new_token, sha256_hex
+    w = await make_world(client, db, contacts=0, arm=False)
+    key_b = new_token()
+    dev_b = f"dev-{uuid.uuid4().hex[:10]}"
+    async with db.connection() as conn:
+        await conn.execute("INSERT INTO devices (id, user_id, device_key_hash) VALUES (%s, %s, %s)",
+                           (dev_b, w.user_id, sha256_hex(key_b)))
+    dev_a_h = {"Authorization": f"Bearer {w.device_key}", "X-Device-Id": w.device_id}
+    dev_b_h = {"Authorization": f"Bearer {key_b}", "X-Device-Id": dev_b}
+
+    def batch(n):
+        return {"rows": [[1000 + i * 20, 0, 0, 1000] for i in range(n)], "batch_id": "b1-000001"}
+    ra = await client.post("/v1/telemetry/batch", headers=dev_a_h, json=batch(10))
+    rb = await client.post("/v1/telemetry/batch", headers=dev_b_h, json=batch(25))
+    rw = await client.post("/v1/telemetry/batch", headers=w.wearer, json=batch(7))
+    assert [r.json()["duplicate"] for r in (ra, rb, rw)] == [False, False, False]
+    assert [r.json()["inserted"] for r in (ra, rb, rw)] == [10, 25, 7]
+    again = await client.post("/v1/telemetry/batch", headers=dev_b_h, json=batch(25))  # a real retry
+    assert again.json() == {"ok": True, "duplicate": True, "inserted": 25, "dropped": 0}
+    async with db.connection() as conn:
+        n = (await (await conn.execute("SELECT count(*) AS n FROM scrunchie_telemetry WHERE user_id = %s",
+                                       (w.user_id,))).fetchone())["n"]
+    assert n == 42

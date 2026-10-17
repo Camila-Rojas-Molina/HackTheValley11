@@ -167,16 +167,18 @@ async def copy_rows(conn, rows: Iterable[tuple]) -> int:
 
 async def ingest(conn, prepared: Prepared, *, user_id: str, device_id: Optional[str],
                  batch_id: Optional[str]) -> dict:
-    """Store one batch. Call inside a transaction. A repeated batch_id stores nothing again."""
+    """Store one batch. Call inside a transaction. A batch_id repeated by the same sender (device,
+    or the wearer key without one) stores nothing again; batch_id is a per-sender retry key."""
     if batch_id:
+        key = f"{device_id or '-'}:{batch_id}"
         claimed = await (await conn.execute(
             """INSERT INTO telemetry_batches (user_id, batch_id, device_id, inserted, dropped)
                VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, batch_id) DO NOTHING RETURNING 1""",
-            (user_id, batch_id, device_id, len(prepared.rows), prepared.dropped))).fetchone()
+            (user_id, key, device_id, len(prepared.rows), prepared.dropped))).fetchone()
         if claimed is None:
             prev = await (await conn.execute(
                 "SELECT inserted, dropped FROM telemetry_batches WHERE user_id = %s AND batch_id = %s",
-                (user_id, batch_id))).fetchone()
+                (user_id, key))).fetchone()
             return {"ok": True, "duplicate": True, "inserted": prev["inserted"] if prev else 0,
                     "dropped": prev["dropped"] if prev else 0}
     inserted = await copy_rows(conn, prepared.rows) if prepared.rows else 0

@@ -6,7 +6,7 @@ POST /v1/telemetry/batch        raw accelerometer + FSR rows, stored with COPY
             clock: "device_ms" (default; t = the R line's ms counter) | "epoch" (Unix s or ms),
             device_ms_now?: device counter at send time (default: the last row's t),
             profile: "night_out" (default; raw kept 48 h) | "care" (raw kept 30 days),
-            simulated: false, batch_id?: retry key (a repeated batch_id is stored once),
+            simulated: false, batch_id?: retry key (repeated by the same sender, stored once),
             device_id?: with the wearer key, one of the wearer's own devices}
      reply: {ok, duplicate, inserted, dropped}   (dropped = rows outside now - 48 h .. now + 60 s)
 GET  /v1/telemetry/zscore       last 5 min vs the user's own 7-day baseline, per metric

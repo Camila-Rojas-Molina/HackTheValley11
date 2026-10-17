@@ -528,7 +528,7 @@ Auth: the device key plus `X-Device-Id`, or the wearer key. Stored with one `COP
 | `device_ms_now` | the device counter at send time |
 | `profile` | `night_out` (default) or `care` |
 | `simulated` | default `false` |
-| `batch_id` | retry key, 1–128 chars: a repeated `batch_id` is stored once |
+| `batch_id` | retry key, 1–128 chars, per sender: a `batch_id` repeated by the same device (or by the wearer key without a device) is stored once |
 | `device_id` | with the wearer key: one of the wearer's own devices (`403` otherwise) |
 | `user_id` | optional; must match the credential (`403` otherwise) |
 
