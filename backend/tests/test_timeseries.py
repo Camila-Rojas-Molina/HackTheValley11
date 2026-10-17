@@ -515,3 +515,42 @@ async def test_same_batch_id_from_two_senders_of_one_wearer_is_stored_twice(clie
         n = (await (await conn.execute("SELECT count(*) AS n FROM scrunchie_telemetry WHERE user_id = %s",
                                        (w.user_id,))).fetchone())["n"]
     assert n == 42
+
+
+def _raw_scans(plan: dict) -> list[dict]:
+    out = []
+    if plan.get("Relation Name") in ("hr_samples", "scrunchie_telemetry"):
+        out.append(plan)
+    for child in plan.get("Plans", []):
+        out += _raw_scans(child)
+    return out
+
+
+async def test_zscore_for_one_wearer_reads_only_that_wearers_raw_rows(db):
+    """GET /v1/telemetry/zscore filters user_zscore_5m by user_id; that filter must reach the raw tables."""
+    import json as _json
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    async with db.connection() as conn:
+        if (await timeseries.setup(conn))["mode"] != "plain":
+            pytest.skip("plain PostgreSQL path only (the rollups are views over the raw tables)")
+        async with conn.transaction():
+            for uid, n in ((a, 120), (b, 3000)):
+                await conn.execute(
+                    """INSERT INTO hr_samples (time, user_id, source, bpm)
+                       SELECT now() - make_interval(secs => g * 20), %s, 'test', 70 FROM generate_series(1, %s) g""",
+                    (uid, n))
+                await conn.execute(
+                    """INSERT INTO scrunchie_telemetry (time, user_id, ax_mg, ay_mg, az_mg)
+                       SELECT now() - make_interval(secs => g * 20), %s, 0, 0, 1000 FROM generate_series(1, %s) g""",
+                    (uid, n))
+            await conn.execute("ANALYZE hr_samples")
+            await conn.execute("ANALYZE scrunchie_telemetry")
+            row = await (await conn.execute(
+                "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM user_zscore_5m WHERE user_id = %s", (a,))).fetchone()
+            plan = row["QUERY PLAN"] if isinstance(row["QUERY PLAN"], list) else _json.loads(row["QUERY PLAN"])
+            await conn.execute("DELETE FROM hr_samples WHERE user_id IN (%s, %s)", (a, b))
+            await conn.execute("DELETE FROM scrunchie_telemetry WHERE user_id IN (%s, %s)", (a, b))
+    scans = _raw_scans(plan[0]["Plan"])
+    assert scans
+    for s in scans:
+        assert s["Actual Rows"] * s.get("Actual Loops", 1) <= 120, (s["Node Type"], s["Relation Name"], s["Actual Rows"])
