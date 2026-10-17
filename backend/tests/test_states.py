@@ -390,3 +390,15 @@ def test_masked_duress_wearer_input_matches_the_twin_and_still_tells_contacts(pu
         assert _wearer_view(d) == _wearer_view(twin), ev
         assert d.to_state == s.state and not d.alert_ops
         assert [n.template for n in d.notify if n.to == "contact"] in (["late_device"], ["late_phone"])
+
+
+@pytest.mark.parametrize("public", [ARMED, ENDED])
+def test_masked_duress_link_notices_follow_the_twin(public):
+    s = masked_duress(public=public)
+    d = decide(s, Event(states.LEASE_EXPIRED))
+    assert d.wearer_templates == ([] if public == ENDED else ["wearer_lost_contact"])
+    assert [n.template for n in d.notify if n.to == "contact"] == ["lost_contact"]
+    assert d.link_state == states.LINK_LOST
+    d2 = decide(step(s, d), Event(states.LINK_RESTORED))
+    assert d2.wearer_templates == ([] if public == ENDED else ["wearer_restored"])
+    assert [n.template for n in d2.notify if n.to == "contact"] == ["restored"]

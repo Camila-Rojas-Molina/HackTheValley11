@@ -254,3 +254,26 @@ async def test_a_pin_after_a_duress_end_answers_like_an_ended_session(client, db
            [t.split(" Timeline")[0] for t in await wearer_texts(db, duress)]
     assert await visible(client, real) == await visible(client, duress)
     assert (await session_row(db, duress.session_id))["state"].startswith("ESCALATED_")
+
+
+@pytest.mark.parametrize("action", ["end", "cancel"])
+async def test_device_unplugged_after_a_duress_pin_messages_the_wearer_like_the_twin(client, db, ctx, action):
+    real, duress = await twin_worlds(client, db)
+    for w in (real, duress):
+        await client.post("/v1/device/heartbeat", headers=w.device(), json={})
+    await cancel_both(client, real, duress, action=action)
+    async with db.connection() as conn:
+        for w in (real, duress):
+            await conn.execute("UPDATE devices SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
+                               (w.device_id,))
+    await timers.check_leases(db, ctx)
+    for w in (real, duress):
+        await client.post("/v1/device/heartbeat", headers=w.device(), json={})  # plugged back in
+
+    def heads_removed(texts):
+        return [t.split(" Timeline")[0] for t in texts]
+    assert heads_removed(await wearer_texts(db, real)) == heads_removed(await wearer_texts(db, duress))
+    assert await visible(client, real) == await visible(client, duress)
+    # The duress world's contacts were told the link dropped and came back.
+    c1 = [o["template"] for o in await outbox(db, duress.session_id, contact_id=duress.contacts[0]["id"])]
+    assert "lost_contact" in c1 and "restored" in c1
