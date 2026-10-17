@@ -13,6 +13,8 @@
                     closes it as a false alarm; the location link answers 410
   7 privacy         contacts see nothing before an alert; an unapproved contact gets nothing; invites are
                     single use; "pass it on"; the location link answers 410 once it expires
+  pcc               PointClickCare senior mode: seeds the synthetic cohort (POST /v1/demo/care-seed) and
+                    checks GET /v1/care/alerts lists every scripted change and no no-change script
 
 Fake device: the demo device (DEVICE_KEY / DEMO_DEVICE_ID), heartbeat every 2 s from a thread.
 Fake contacts: web contacts "SIM-A" and "SIM-B" (approved, in that order) and "SIM-P" (joined, never
@@ -21,10 +23,10 @@ approved), created through the wearer API and removed at the end.
 Env (the server's values): STILLHERE_URL (default http://localhost:8000), ADMIN_KEY, DEVICE_KEY,
 DEMO_DEVICE_ID, WEARER_KEY, DEMO_PIN, DEMO_DURESS_PIN. backend/.env is read if present.
 
-  python scripts/simulate.py            # all seven (about 4 minutes in demo timing)
-  python scripts/simulate.py 2 5        # a subset
+  ../.venv/bin/python scripts/simulate.py          # all seven plus the PCC seed (about 4 minutes in demo timing)
+  ../.venv/bin/python scripts/simulate.py 2 5 pcc  # a subset
 
-Prints PASS/FAIL per scenario and exits 1 if any failed. It changes the demo wearer's session, heart-rate
+Prints PASS/FAIL per step and exits 1 if any failed. It changes the demo wearer's session, heart-rate
 baseline and contacts, so it refuses to run while the demo wearer has approved contacts it did not create
 (they would get real alerts): run it against its own database, e.g. a second server on another port.
 """
@@ -607,14 +609,34 @@ SCENARIOS = [
 ]
 
 
+def pcc_seed(srv: Server) -> str:
+    """PointClickCare senior mode: seed the synthetic cohort, then check the alert cards it gives."""
+    seed = srv.ok(srv.admin("POST", "/v1/demo/care-seed", json={}), "care seed")
+    changes, steady = seed["scripted_change"], seed["no_change_scripts"]
+    check(seed.get("synthetic") is True and seed["residents"] == 20, f"care seed: {seed}")
+    check(changes["flagged"] == changes["residents"],
+          f"scripted changes flagged {changes['flagged']}/{changes['residents']}")
+    check(steady["flagged"] == 0, f"no-change scripts flagged {steady['flagged']}")
+    alerts = srv.ok(srv.c.get("/v1/care/alerts"), "care alerts")["alerts"]
+    flagged = [a for a in alerts if a["level"] in ("watch", "check today")]
+    check(len(flagged) == changes["residents"], f"/v1/care/alerts lists {len(flagged)} flagged cards")
+    check(all(a["synthetic"] for a in alerts), "a care card is not labelled synthetic")
+    return (f"{seed['residents']} synthetic residents seeded; {len(flagged)} flagged cards on /v1/care/alerts "
+            f"(all {changes['residents']} scripted changes, 0 of {steady['residents']} no-change scripts)")
+
+
+# Every step of a run: the seven KAZE scenarios, then the PointClickCare seed.
+STEPS = SCENARIOS + [("pcc", "PointClickCare senior mode: synthetic cohort seed", lambda run: note(pcc_seed(run.srv)))]
+
+
 def main(argv: Optional[list] = None) -> int:
     try:
         from dotenv import load_dotenv
         load_dotenv(BACKEND / ".env")
     except ImportError:
         pass
-    ap = argparse.ArgumentParser(description="Run the seven KAZE scenarios against a running server.")
-    ap.add_argument("only", nargs="*", help="scenario numbers (default: all)")
+    ap = argparse.ArgumentParser(description="Run the seven KAZE scenarios and the PCC seed against a running server.")
+    ap.add_argument("only", nargs="*", help="scenario numbers and/or 'pcc' (default: all)")
     ap.add_argument("--url", default=os.environ.get("STILLHERE_URL", "http://localhost:8000"))
     args = ap.parse_args(argv)
     env = {k: os.environ.get(k) for k in ("ADMIN_KEY", "DEVICE_KEY", "WEARER_KEY", "DEMO_PIN", "DEMO_DURESS_PIN")}
@@ -635,11 +657,11 @@ def main(argv: Optional[list] = None) -> int:
     run = Run(srv, dev, env["DEMO_PIN"], env["DEMO_DURESS_PIN"], os.environ.get("DEMO_WEARER_NAME") or "Maya")
     run.setup_contacts()
     dev.start()
-    chosen = [s for s in SCENARIOS if not args.only or s[0] in args.only]
+    chosen = [s for s in STEPS if not args.only or s[0] in args.only]
     results = []
     try:
         for num, title, fn in chosen:
-            print(f"[{num}/7] {title}", flush=True)
+            print(f"[{num}] {title}", flush=True)
             t0 = time.monotonic()
             try:
                 fn(run)
@@ -651,12 +673,12 @@ def main(argv: Optional[list] = None) -> int:
                 traceback.print_exc()
             dt = time.monotonic() - t0
             results.append((num, title, ok, dt))
-            print(f"[{num}/7] {title}: {'PASS' if ok else 'FAIL'} ({dt:.1f} s){'  ' + why if why else ''}", flush=True)
+            print(f"[{num}] {title}: {'PASS' if ok else 'FAIL'} ({dt:.1f} s){'  ' + why if why else ''}", flush=True)
     finally:
         dev.close()
         run.cleanup()
     passed = sum(1 for r in results if r[2])
-    print(f"\n{passed}/{len(results)} scenarios passed", flush=True)
+    print(f"\n{passed}/{len(results)} steps passed", flush=True)
     for num, title, ok, dt in results:
         print(f"  {'PASS' if ok else 'FAIL'}  {num} {title}")
     return 0 if passed == len(results) else 1

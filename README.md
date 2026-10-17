@@ -143,15 +143,16 @@ Runs the seven KAZE scenarios over HTTP with a fake device and fake web contacts
 6. false alarm
 7. privacy
 
-It prints PASS/FAIL per scenario and exits 1 on any failure (about 4 minutes in demo timing). It changes the
+then the PointClickCare seed (`pcc`): it seeds the synthetic cohort and checks `/v1/care/alerts` lists every
+scripted change. It prints PASS/FAIL per step and exits 1 on any failure (about 4 minutes in demo timing). It changes the
 demo wearer's session and contacts and refuses to run while the demo wearer has approved contacts it did not
 create, so give it its own server and database:
 
 ```bash
 # Second database "stillhere_sim" (same pgserver snippet as above, another name), then:
 PORT=8001 DATABASE_URL='<stillhere_sim URL>' backend/scripts/serve.sh &
-STILLHERE_URL=http://127.0.0.1:8001 .venv/bin/python backend/scripts/simulate.py        # all seven
-STILLHERE_URL=http://127.0.0.1:8001 .venv/bin/python backend/scripts/simulate.py 2 5    # a subset
+STILLHERE_URL=http://127.0.0.1:8001 .venv/bin/python backend/scripts/simulate.py          # all seven + pcc
+STILLHERE_URL=http://127.0.0.1:8001 .venv/bin/python backend/scripts/simulate.py 2 5 pcc  # a subset
 ```
 
 Both read `ADMIN_KEY`, `DEVICE_KEY`, `DEMO_DEVICE_ID`, `WEARER_KEY`, `DEMO_PIN` and `DEMO_DURESS_PIN` from
