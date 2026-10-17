@@ -66,7 +66,7 @@ bridge -> device
 |---|---|
 | `boot_id` | Random id chosen at power-on. A new `boot_id` resets the sequence. |
 | `seq` | Counter within one boot. The bridge sends it as `X-Seq`; an `H` line with an old `seq` does not extend the lease. |
-| `enmo60_mg` | Mean ENMO over the last 60 s, in milli-g (≥ 0). Below 45 mg counts as still. |
+| `enmo60_mg` | Mean ENMO over the last 60 s, in milli-g (≥ 0). Below 45 mg counts as still (an untested engineering assumption). |
 | `tilt_deg`, `fsr_base_mv` | Head tilt and the squeeze sensor's resting level. Parsed; not sent to the server today. |
 | `offbody` | `1`/`true`/`t`/`yes` when the scrunchie is off; anything else is false. |
 | `type` | `squeeze`, `head_position_change`, `fall_like`, `offbody` or `prompt_shown`. |
@@ -161,7 +161,8 @@ Heart rate is pluggable: any source can post here (HeartCast on the iPhone via `
 streaming-service API, an Apple Health Shortcut, the simulator). Heart rate can only bring a check-in
 forward. The heart-rate rule fires when the 60 s median differs from the wearer's baseline by at least
 max(30 bpm, 35 %) for 15 s (demo) or 90 s (real) while she is still. A gap of more than 120 s also brings
-the check-in forward, once per gap.
+the check-in forward, once per gap. All of these numbers are untested engineering assumptions
+(`app/rules.py`), not validated values.
 
 ### `POST /v1/hr`
 
