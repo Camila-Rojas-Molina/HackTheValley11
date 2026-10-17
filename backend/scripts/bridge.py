@@ -268,8 +268,8 @@ class Bridge:
 
     def flush_telemetry(self) -> None:
         """POST one batch of waiting R rows when it is full or its oldest row has waited TEL_EVERY_S."""
-        if not self._tel_rows:
-            return
+        if not self._tel_rows or self.events:
+            return   # events first: while one is waiting (server trouble), telemetry holds back
         now = self.clock()
         if now < self._tel_next:
             return

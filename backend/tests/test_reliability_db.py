@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -126,7 +127,8 @@ async def test_about_one_message_per_second_per_chat(db, ctx, monkeypatch):
             """INSERT INTO outbox (dedupe_key, recipient, chat_id, purpose, text)
                VALUES (%s, 'chat', 5612, 'x', 'other chat') RETURNING id""", (f"thr-b:{time.time_ns()}",))).fetchone())["id"]
     clock = {"t": 5000.0}
-    monkeypatch.setattr(ob.time, "monotonic", lambda: clock["t"])
+    # Only the outbox's clock (patching time.monotonic itself would freeze the event loop's clock too).
+    monkeypatch.setattr(ob, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
     api = FakeTelegram()
     sender = Sender(db, ctx, api)
     await sender.run_once()                             # one row per chat: a1 and b1 go together

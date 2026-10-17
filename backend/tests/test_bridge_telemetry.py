@@ -182,6 +182,18 @@ def test_events_still_go_first_and_never_wait_behind_telemetry():
     _r_lines(b, 0, 20)
     b.handle_line('E,b7:2,squeeze,{"pattern":"plain","k":2}')
     assert srv.calls[-1] == "/v1/device/events"                  # sent at once, before any batch
+    # While an event waits for the server, telemetry holds back (a slow 503 must not delay the event).
+    srv.up = False
+    b.handle_line('E,b7:3,squeeze,{"pattern":"duress","k":3}')
+    _r_lines(b, 1_000, 20)
+    srv.up = True
+    clock.t += 0.5                                               # before the event's retry: nothing goes out
+    n = len(srv.calls)
+    b.tick()
+    assert len(srv.calls) == n and len(b.events) == 1 and len(b._tel_rows) == 40
+    clock.t += 1.0                                               # the event first, then the rows
+    b.tick()
+    assert srv.calls[n:] == ["/v1/device/events", "/v1/telemetry/batch"] and b.events == []
     http.close()
 
 

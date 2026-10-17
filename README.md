@@ -217,6 +217,11 @@ There is no wearer web page (`/me`) in this repo; the wearer actions above are t
 The app runs without any of these: Telegram falls back to a log channel, the database to the local one,
 Vultr to the template. Plug them in one at a time and restart the server after each.
 
+Not yet run against the live services: the Telegram Bot API (tests use a fake one), Tiger Cloud, Vultr
+Serverless Inference (tests use a mocked endpoint) and a Vultr VM. Run this checklist before the demo, not
+during it. The "tunnel down" chaos check (stop `cloudflared` for 30 s; the device and Telegram should not
+notice, since the bridge talks to `localhost` and the bot long-polls out) has not been run either.
+
 **Secrets rule:**
 
 - Never paste a token, password or key into a chat, a commit, an issue or a terminal command line.
@@ -337,7 +342,7 @@ Notes:
 | Personal timeline hash chain | **Demonstrated** (export recomputes the chain; `?format=html` prints it with "Chain verified ✓" per session) | The server itself could recompute a chain before export; it is a personal record, not proof against the operator |
 | Personal timeline retention: deleted 30 days after the session ended unless pinned | **Configured** (hourly job in the timer worker; tested with backdated sessions) | Same erase flag and tombstone as "Delete my data" |
 | Response windows adjustable up to 10× | **Demonstrated** (`window_multiplier`) | Usability with real users |
-| Hosting on a Vultr Compute VM (compose + Caddy HTTPS) | **Configured**; the same compose stack was smoke-tested locally | Not yet deployed from this repo |
+| Hosting on a Vultr Compute VM (compose + Caddy HTTPS) | **Configured**; the compose stack was smoke-tested locally in an earlier environment with Docker, and not rebuilt since | Not yet deployed from this repo |
 | Vultr Serverless Inference wording of PCC briefings | **Configured** and wired into `GET /v1/care/alerts`; tested against a mocked endpoint, and the template fallback is covered by tests | A live call needs a key. Before display the text is checked against the banned terms and the senior-mode wording rules, and every number in it must be on the card |
 | Tiger Data: hypertables, 1 min → 1 h → 1 d real-time rollups, z-score view, compression, per-profile retention | **Demonstrated** on local TimescaleDB 2.30.2 (PostgreSQL 17.11 built from source, no Toolkit; earlier PostgreSQL 16, and 18 with Toolkit, in Docker) and on plain PostgreSQL | Not yet run on Tiger Cloud. The z-score is display only |
 | Debug telemetry: RECORD-mode `R` lines → `scrunchie_telemetry` | **Configured**: `bridge.py` forwards them while the heartbeat reply says `"telemetry": "debug"` (demo profile); the real profile sends heartbeats and events only | Not yet run with the scrunchie's firmware; `feats` in heartbeats is accepted and not stored |
