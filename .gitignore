@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# local secrets and planning notes (never commit)
+.env*
+!.env.example
+docs/planning/
+.pgdata*/
