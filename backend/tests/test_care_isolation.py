@@ -70,10 +70,11 @@ def app_closure(roots) -> set[str]:
 
 def test_care_import_closure_never_reaches_the_escalation_path():
     closure = app_closure(CARE_MODULES)
-    # app.vultr words the briefing of a finished card; it imports nothing from app.
+    # app.vultr words the briefing of a finished card; from app it imports only the care rule
+    # engine (for its CLI check's sample card).
     assert closure <= {"app", "app.routes", "app.care", "app.routes.care", "app.security", "app.vultr"}, closure
     assert not closure & KAZE_MODULES
-    assert app_closure(["app.vultr"]) == {"app.vultr"}
+    assert app_closure(["app.vultr"]) <= {"app", "app.vultr", "app.care"}
 
 
 def test_fresh_interpreter_loads_no_kaze_module():

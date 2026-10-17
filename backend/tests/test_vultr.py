@@ -36,7 +36,26 @@ KAZE_MODULES = (
     "app.routes.health",
 )
 
-CARD = copy.deepcopy(vultr.SAMPLE_CARD)
+# A hand-made card in the shared PCC card shape, to exercise the template and the response
+# checks with round numbers. Not an engine card; vultr.sample_card() is (see the CLI tests).
+FIXTURE_CARD = {
+    "resident_id": "SYN-007",
+    "display_name": "Resident 7",
+    "synthetic": True,
+    "score": 64,
+    "level": "watch",
+    "rules": [
+        {"rule": "sway_drift", "observed": 41.0, "baseline": 30.0, "unit": "mg", "contribution": 30,
+         "explanation": "Standing sway 37% above the 48 h baseline"},
+        {"rule": "rise_to_settle", "observed": 19.0, "baseline": 11.0, "unit": "s", "contribution": 24,
+         "explanation": "Heart rate took 19 s to settle after standing, usual 11 s"},
+        {"rule": "night_restlessness", "observed": 9, "baseline": 4, "unit": "periods", "contribution": 10,
+         "explanation": "9 restless periods last night, usual 4"},
+    ],
+    "suggested_check": "CNA: watch one sit-to-stand and ask how the resident slept",
+    "briefing": "",
+}
+CARD = copy.deepcopy(FIXTURE_CARD)
 CARD["display_name"] = "Rosa Example"
 CARD["rules"][0]["explanation"] = "Rosa Example swayed 37% more than her 48 h baseline"
 
@@ -286,10 +305,11 @@ def test_blocked_stems_match_the_wording_test():
 
 def test_prompt_and_sample_follow_the_wording_rules():
     assert not PATTERN.search(vultr.SYSTEM_PROMPT)
-    assert not PATTERN.search(json.dumps(vultr.SAMPLE_CARD))
-    assert set(vultr.SAMPLE_CARD) == {"resident_id", "display_name", "synthetic", "score", "level", "rules",
-                                      "suggested_check", "briefing"}
-    assert all(set(r) == set(vultr.RULE_FIELDS) for r in vultr.SAMPLE_CARD["rules"])
+    sample = vultr.sample_card()
+    assert not PATTERN.search(json.dumps(sample, ensure_ascii=False))
+    assert {"resident_id", "display_name", "synthetic", "score", "level", "rules", "suggested_check",
+            "briefing"} <= set(sample)
+    assert all(set(vultr.RULE_FIELDS) <= set(r) for r in sample["rules"])
 
 
 # --- isolation from KAZE -----------------------------------------------------------
@@ -327,8 +347,10 @@ def test_importing_every_kaze_module_does_not_load_vultr():
 
 
 def test_vultr_depends_on_nothing_in_kaze():
+    # Its only in-app import is the care rule engine (for the CLI check's sample card), which
+    # itself imports nothing from KAZE (test_care_isolation.py).
     own = {i for i in _imports(APP / "vultr.py") if i.startswith(("app", ".")) or i == ""}
-    assert own == set(), own
+    assert own <= {"", ".care"}, own
     assert not any(i.split(".")[0] in {"states", "engine", "timers", "outbox", "telegram"} for i in
                    _imports(APP / "vultr.py"))
 
@@ -381,3 +403,18 @@ def test_env_example_has_only_placeholders_for_vultr():
     text = (BACKEND / ".env.example").read_text()
     assert re.search(r"^VULTR_API_KEY=$", text, re.M)
     assert re.search(r"^VULTR_MODEL=qwen3\.8-flash-next$", text, re.M)
+
+
+def test_cli_check_uses_a_card_the_rule_engine_produces():
+    """`python -m app.vultr` must exercise a real card: a green check then means real cards get through."""
+    from app import care
+    card = vultr.sample_card()
+    assert {r["rule"] for r in card["rules"]} == set(care.RULES)
+    assert card["level"] == care.level_for(card["score"], any(r["top_band"] for r in card["rules"]))
+    assert card["level"] in care.FLAGGED and card["synthetic"] is True
+    assert {"m/s²", "s", "min"} == {r["unit"] for r in card["rules"]}
+
+
+def test_template_briefing_does_not_call_the_baseline_recent():
+    text = vultr.template_briefing(vultr.sample_card())
+    assert "recent baseline" not in text and "baseline from the start of the record" in text

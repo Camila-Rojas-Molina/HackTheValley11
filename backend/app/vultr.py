@@ -218,7 +218,8 @@ def template_briefing(card: Mapping) -> str:
         check = card.get("suggested_check")
         if isinstance(check, str) and check.strip():
             text += f" Suggested check: {check.strip().rstrip('.')}."
-        text += " This compares the resident with their own recent baseline; it is not a medical assessment."
+        text += (" This compares the resident with their own baseline from the start of the record; "
+                 "it is not a medical assessment.")
         return text
     except Exception:  # a malformed card must never break the care page
         log.warning("template_briefing could not read the card")
@@ -450,24 +451,13 @@ async def abriefing_text(card: dict, *, env: Optional[Mapping[str, str]] = None,
     return (await abriefing(card, env=env, transport=transport))["text"]
 
 
-# Shape of the shared PCC card contract, for the CLI check below. Made-up synthetic values.
-SAMPLE_CARD = {
-    "resident_id": "SYN-007",
-    "display_name": "Resident 7",
-    "synthetic": True,
-    "score": 64,
-    "level": "watch",
-    "rules": [
-        {"rule": "sway_drift", "observed": 41.0, "baseline": 30.0, "unit": "mg", "contribution": 30,
-         "explanation": "Standing sway 37% above the 48 h baseline"},
-        {"rule": "rise_to_settle", "observed": 19.0, "baseline": 11.0, "unit": "s", "contribution": 24,
-         "explanation": "Heart rate took 19 s to settle after standing, usual 11 s"},
-        {"rule": "night_restlessness", "observed": 9, "baseline": 4, "unit": "periods", "contribution": 10,
-         "explanation": "9 restless periods last night, usual 4"},
-    ],
-    "suggested_check": "CNA: watch one sit-to-stand and ask how the resident slept",
-    "briefing": "",
-}
+def sample_card() -> dict:
+    """For the CLI check below: the top card the rule engine gives the default synthetic cohort,
+    so 'source: vultr' means a real card's numbers and wording got through, not a made-up one."""
+    from . import care
+    end = care.default_end_day()
+    cards = care.score_cohort(care.generate_cohort(care.DEFAULT_SEED, end), end)
+    return max(cards, key=lambda c: (c["score"], c["resident_id"]))
 
 
 def main() -> int:
@@ -478,7 +468,9 @@ def main() -> int:
         pass
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     print(json.dumps(status(), indent=1))
-    result = briefing(SAMPLE_CARD)
+    card = sample_card()
+    print(f"card: {card['display_name']}, {card['level']}, score {card['score']}/100 (rule engine, synthetic)")
+    result = briefing(card)
     print(f"source: {result['source']}" + (f" ({result['model']})" if result["model"] else ""))
     print(result["text"])
     return 0

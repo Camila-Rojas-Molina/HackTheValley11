@@ -250,9 +250,10 @@ Vultr to the template. Plug them in one at a time and restart the server after e
 2. Copy the key from the subscription's Overview. It is the inference key, not the account API key.
 3. Put it in `VULTR_API_KEY` with the env-key flow.
 4. Shape check: `awk -F= '/^VULTR_API_KEY=/{print length($2) " chars"}' backend/.env`.
-5. `cd backend && ../.venv/bin/python -m app.vultr` prints the config (never the key), `source: vultr` and a
-   sample briefing. `source: template` means the key, the model or the network is wrong; the log line
-   says which.
+5. `cd backend && ../.venv/bin/python -m app.vultr` prints the config (never the key), the top card the
+   rule engine gives the synthetic cohort, `source: vultr` and its briefing. `source: template` means the
+   key, the model or the network is wrong, or the model's text failed the wording or number check; the log
+   line says which. Each card on `/v1/care/alerts` still carries its own `briefing_source`.
 6. Live model list, no auth: `curl -s https://api.vultrinference.com/v1/models`. Change `VULTR_MODEL` if
    `qwen3.8-flash-next` is gone.
 
