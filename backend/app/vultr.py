@@ -69,7 +69,9 @@ USED_FOR = "PointClickCare care-team briefings only"
 
 LEVEL_PHRASES = {
     "low": "no change worth acting on",
-    "watch": "worth watching",
+    "worth a look this shift": "worth a look this shift",
+    "review this shift": "review this shift with the nurse",
+    "watch": "worth watching",              # earlier level names, for cards stored before them
     "check today": "check in person today",
 }
 RULE_FIELDS = ("rule", "observed", "baseline", "unit", "contribution", "explanation")

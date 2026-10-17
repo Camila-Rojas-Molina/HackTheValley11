@@ -1,4 +1,4 @@
-"""Senior-mode cards worded by Vultr: GET /v1/care/alerts sends each "watch" / "check today" card to
+"""Senior-mode cards worded by Vultr: GET /v1/care/alerts sends each flagged card to
 app.vultr and shows the model's text only as the briefing. Score, level, rules and suggested check
 come from the rule engine and are never changed; without a key, on an error or on text that breaks
 the care wording rules, the card keeps the rule template. Vultr is mocked here (no network)."""

@@ -75,7 +75,7 @@ def test_generator_is_deterministic_per_seed():
 def test_default_seed_flags_every_scripted_change_and_nothing_else():
     for res, card in scored():
         if res.script.expect_flag:
-            assert card["level"] in (care.LEVEL_WATCH, care.LEVEL_CHECK), (res.id, res.script.name, card["score"])
+            assert card["level"] in (care.LEVEL_LOOK, care.LEVEL_REVIEW), (res.id, res.script.name, card["score"])
             assert set(res.script.moves) <= fired(card), (res.id, res.script.name, fired(card))
         else:
             assert card["score"] == 0 and card["level"] == care.LEVEL_LOW, (res.id, res.script.name, card["rules"])
@@ -143,7 +143,7 @@ def test_every_card_meets_the_shared_contract():
         assert CONTRACT_KEYS <= set(card)
         assert card["synthetic"] is True
         assert isinstance(card["score"], int) and 0 <= card["score"] <= 100
-        assert card["level"] in ("low", "watch", "check today")
+        assert card["level"] in ("low", "worth a look this shift", "review this shift")
         assert card["score"] == sum(r["contribution"] for r in card["rules"])
         assert [r["rule"] for r in card["rules"]] == list(care.RULES)
         for r in card["rules"]:
@@ -281,12 +281,16 @@ def test_lower_values_never_score():
     assert card["score"] == 0 and card["level"] == care.LEVEL_LOW
 
 
-@pytest.mark.parametrize("score,top,level", [
-    (0, False, "low"), (14, False, "low"), (15, False, "watch"), (44, False, "watch"),
-    (45, False, "check today"), (30, True, "check today"), (100, True, "check today"),
+@pytest.mark.parametrize("today,span,level", [
+    (set(), set(), "low"),
+    (set(), {"night_restlessness"}, "low"),                                   # nothing fires today
+    ({"night_restlessness"}, {"night_restlessness"}, "worth a look this shift"),
+    ({"stand_hr_response"}, {"stand_hr_response", "night_restlessness"}, "review this shift"),
+    ({"stand_hr_response", "night_restlessness"}, {"stand_hr_response", "night_restlessness"},
+     "review this shift"),
 ])
-def test_levels(score, top, level):
-    assert care.level_for(score, top) == level
+def test_levels(today, span, level):
+    assert care.level_for(today, span) == level
 
 
 def test_missing_data_scores_nothing_and_says_so():
@@ -307,10 +311,12 @@ def test_suggested_check_is_for_the_aide_and_points_to_the_nurse():
     for _, card in scored():
         by_level.setdefault(card["level"], []).append(card)
     assert by_level["low"][0]["suggested_check"] == "No extra check suggested; continue routine care."
-    for card in by_level.get("watch", []) + by_level["check today"]:
+    for card in by_level.get(care.LEVEL_LOOK, []) + by_level[care.LEVEL_REVIEW]:
         assert card["suggested_check"].endswith("Tell the nurse what you see.")
-    for card in by_level["check today"]:
-        assert card["suggested_check"].startswith("Ask the nurse to review this resident today.")
+    for card in by_level[care.LEVEL_REVIEW]:
+        assert card["suggested_check"].startswith("Ask the nurse to review this resident this shift.")
+    for card in by_level[care.LEVEL_LOOK]:
+        assert card["suggested_check"].startswith("Worth a look this shift:")
 
 
 def test_missing_device_data_is_never_reported_as_routine_care():
@@ -331,7 +337,7 @@ def test_missing_device_data_is_never_reported_as_routine_care():
     days = flat_days(night_restless_min=200.0)
     days[-1] = replace(days[-1], stand_ups=0, stand_hr_n=0)
     card = care.score_resident("X", "X", days, END)
-    assert card["level"] == care.LEVEL_CHECK and not card["data_quality"]["all_rules_scored"]
+    assert card["level"] == care.LEVEL_LOOK and not card["data_quality"]["all_rules_scored"]
 
 
 def test_stand_hr_not_enough_data_text_states_the_rule_it_applies():
@@ -482,3 +488,47 @@ def test_stand_hr_aide_check_points_to_vitals_per_protocol():
     assert "lying 5 min" in text and "1 and 3 min standing" in text
     assert "SOURCES" in dir(care) and "CDC STEADI" in care.SOURCES[care.STAND_HR]
     assert "Norcliffe-Kaufmann 2018" in care.SOURCES[care.STAND_HR]
+
+
+# --- research 1.5: a single rule is "worth a look"; "review" needs 2 different rules in 3 days -------
+def shifted(days, dates, **kw):
+    return [replace(d, **kw) if d.day in dates else d for d in days]
+
+
+def test_a_single_rule_at_its_top_band_is_only_worth_a_look():
+    card = care.score_resident("X", "X", flat_days(night_restless_min=200.0), END)
+    night = rule(card, care.NIGHT)
+    assert night["contribution"] == night["max_contribution"] and night["top_band"]
+    assert card["level"] == care.LEVEL_LOOK
+
+
+def test_two_rules_today_is_review_this_shift():
+    card = care.score_resident("X", "X", flat_days(night_restless_min=200.0, stand_hr_delta_bpm=2.0), END)
+    assert card["level"] == care.LEVEL_REVIEW
+    assert card["fired_last_3_days"] == {care.NIGHT: [END.isoformat()], care.STAND_HR: [END.isoformat()]}
+
+
+def test_a_different_rule_two_days_ago_makes_it_review():
+    days = flat_days(night_restless_min=200.0)                     # night fires today
+    two_ago = END - timedelta(days=2)
+    days = shifted(days, {two_ago - timedelta(days=1), two_ago}, stand_hr_delta_bpm=2.0)  # heart rate fired then
+    card = care.score_resident("X", "X", days, END)
+    assert rule(card, care.STAND_HR)["contribution"] == 0          # not today...
+    assert two_ago.isoformat() in card["fired_last_3_days"][care.STAND_HR]
+    assert card["level"] == care.LEVEL_REVIEW                       # ...but within the last 3 days
+
+
+def test_a_rule_three_days_ago_is_outside_the_span():
+    days = flat_days(night_restless_min=200.0)
+    three_ago = END - timedelta(days=3)
+    days = shifted(days, {three_ago - timedelta(days=1), three_ago}, stand_hr_delta_bpm=2.0)
+    card = care.score_resident("X", "X", days, END)
+    assert care.STAND_HR not in card["fired_last_3_days"]
+    assert card["level"] == care.LEVEL_LOOK
+
+
+def test_score_no_longer_sets_the_level():
+    assert not hasattr(care, "CHECK_TODAY_FROM") and not hasattr(care, "WATCH_FROM")
+    assert care.LEVELS == ("low", "worth a look this shift", "review this shift", "not enough data")
+    assert care.FLAGGED == ("worth a look this shift", "review this shift")
+    assert "2 different rules" in care.THRESHOLDS["levels"] and "3 days" in care.THRESHOLDS["levels"]

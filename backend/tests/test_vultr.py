@@ -410,7 +410,8 @@ def test_cli_check_uses_a_card_the_rule_engine_produces():
     from app import care
     card = vultr.sample_card()
     assert {r["rule"] for r in card["rules"]} == set(care.RULES)
-    assert card["level"] == care.level_for(card["score"], any(r["top_band"] for r in card["rules"]))
+    today = {r["rule"] for r in card["rules"] if r["contribution"] > 0}
+    assert card["level"] == care.level_for(today, set(card["fired_last_3_days"]))
     assert card["level"] in care.FLAGGED and card["synthetic"] is True
     assert {"bpm", "min"} == {r["unit"] for r in card["rules"]}  # sway and balance are experimental, not scored
 

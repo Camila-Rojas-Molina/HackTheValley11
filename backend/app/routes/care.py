@@ -2,10 +2,10 @@
 
 GET  /v1/care/residents   every synthetic resident with their latest score and level, plus the
                           generator's script (ground truth for checking the rules; never read by them)
-GET  /v1/care/alerts      latest alert cards at level "watch" or "check today": "check today" first,
-                          then by score
+GET  /v1/care/alerts      latest alert cards at level "worth a look this shift" or "review this shift":
+                          "review this shift" first, then by score
                           (?include_low=true returns every resident's card)
-                          Each "watch" / "check today" card's briefing is worded by Vultr Serverless
+                          Each flagged card's briefing is worded by Vultr Serverless
                           Inference when VULTR_API_KEY is set (app/vultr.py); briefing_source says
                           which text is shown: "vultr", or "template" (care.local_briefing).
 POST /v1/demo/care-seed   X-Admin-Key. Body optional: {seed, end_day}. Replaces the synthetic cohort
@@ -63,7 +63,7 @@ async def care_alerts(request: Request, include_low: bool = False):
 
 
 async def word_briefings(cards: list[dict], **vultr_options) -> list[dict]:
-    """Replace the briefing of each "watch" / "check today" card with Vultr's wording, in place.
+    """Replace the briefing of each flagged card (care.FLAGGED) with Vultr's wording, in place.
 
     Runs on finished cards: score, level, rules and suggested check are already set and are
     not touched. vultr.abriefing never raises and never blocks the event loop the KAZE timer

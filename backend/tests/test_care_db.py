@@ -105,8 +105,8 @@ async def test_alerts_are_the_flagged_cards_check_today_first_then_by_score(clie
     assert body["synthetic"] is True and body["as_of"] == END.isoformat()
     assert body["thresholds_status"] == "untested assumption"
     cards = body["alerts"]
-    assert len(cards) == 5 and all(c["level"] in ("watch", "check today") for c in cards)
-    keys = [(c["level"] != "check today", -c["score"]) for c in cards]
+    assert len(cards) == 5 and all(c["level"] in care.FLAGGED for c in cards)
+    keys = [(c["level"] != care.LEVEL_REVIEW, -c["score"]) for c in cards]
     assert keys == sorted(keys)
     for c in cards:
         assert {"resident_id", "display_name", "synthetic", "score", "level", "rules", "suggested_check",

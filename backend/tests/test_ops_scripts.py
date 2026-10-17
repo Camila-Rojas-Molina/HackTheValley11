@@ -53,7 +53,7 @@ def test_simulate_runs_the_pcc_seed_after_the_kaze_scenarios():
                     "scripted_change": {"residents": 7, "flagged": scripted_flagged},
                     "no_change_scripts": {"residents": 13, "flagged": 0}})
             if request.url.path == "/v1/care/alerts":
-                levels = ["check today"] * flagged_cards
+                levels = ["review this shift"] * flagged_cards
                 return httpx.Response(200, json={"synthetic": True, "alerts": [
                     {"resident_id": f"R-{i:02d}", "level": lv, "score": 50, "synthetic": True}
                     for i, lv in enumerate(levels)]})

@@ -618,7 +618,7 @@ def pcc_seed(srv: Server) -> str:
           f"scripted changes flagged {changes['flagged']}/{changes['residents']}")
     check(steady["flagged"] == 0, f"no-change scripts flagged {steady['flagged']}")
     alerts = srv.ok(srv.c.get("/v1/care/alerts"), "care alerts")["alerts"]
-    flagged = [a for a in alerts if a["level"] in ("watch", "check today")]
+    flagged = [a for a in alerts if a["level"] in ("worth a look this shift", "review this shift")]
     check(len(flagged) == changes["residents"], f"/v1/care/alerts lists {len(flagged)} flagged cards")
     check(all(a["synthetic"] for a in alerts), "a care card is not labelled synthetic")
     return (f"{seed['residents']} synthetic residents seeded; {len(flagged)} flagged cards on /v1/care/alerts "

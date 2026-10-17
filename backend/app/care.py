@@ -31,10 +31,13 @@ The generator's day-to-day variation is a chosen demo value and the scripted cha
 large next to it; real data will be noisier, and how early a change shows up here comes
 from the script, not from any study.
 
-Card. score 0-100 is the sum of the rule contributions (55 + 45 at most). Level:
-"check today" from 45 points or when any rule reaches its top band, "watch" from 15,
-otherwise "low", or "not enough data" when a rule could not score (the data stopped). Every threshold here is an untested assumption (a demo parameter), not a
-clinical cut-off, and the API says so on every card.
+Card. score 0-100 is the sum of today's rule contributions (55 + 45 at most). The level does
+not follow the score (research 1.5): "worth a look this shift" when one rule fires today;
+"review this shift" only when 2 different rules fired in the last 3 days, one of them today
+(Skubic 2015: a multi-feature rule matched an SVM at about 86% accuracy, while single-feature
+alerts were rated good only 39% of the time); otherwise "low", or "not enough data" when a rule
+could not score (the data stopped). Every threshold here is an untested assumption (a demo
+parameter), not a clinical cut-off, and the API says so on every card.
 """
 from __future__ import annotations
 
@@ -53,10 +56,13 @@ SWAY, SETTLE_BALANCE = "postural_sway_drift", "settle_balance"
 STAND_HR, NIGHT = "stand_hr_response", "night_restlessness"
 RULES = (STAND_HR, NIGHT)               # scored
 EXPERIMENTAL = (SWAY, SETTLE_BALANCE)   # shown greyed out, never scored (research 1.1, 1.2)
-LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK = "low", "watch", "check today"
-LEVEL_NO_DATA = "not enough data"  # below "watch" with a rule unable to score: the data stopped
-LEVELS = (LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK, LEVEL_NO_DATA)
-FLAGGED = (LEVEL_WATCH, LEVEL_CHECK)
+LEVEL_LOW, LEVEL_LOOK, LEVEL_REVIEW = "low", "worth a look this shift", "review this shift"
+LEVEL_NO_DATA = "not enough data"  # nothing fired and a rule was unable to score: the data stopped
+LEVELS = (LEVEL_LOW, LEVEL_LOOK, LEVEL_REVIEW, LEVEL_NO_DATA)
+FLAGGED = (LEVEL_LOOK, LEVEL_REVIEW)
+# "Review this shift" needs 2 different rules in this many days, today included (research 1.5:
+# "at least 2 different rules" in a 3-day span; Skubic 2015 multi-feature rules).
+LEVEL_SPAN_DAYS = 3
 
 DEFAULT_SEED = 11
 RESIDENT_COUNT = 20
@@ -90,8 +96,6 @@ NIGHT_BANDS = ((4.0, 45), (2.5, 25))  # (smaller of the 2 nights' z, points): Sk
 # A baseline SD is never taken below 5% of the baseline mean, so a very steady fortnight cannot
 # turn a few minutes into a large z (assumption).
 SD_FLOOR_FRAC = 0.05
-WATCH_FROM = 15
-CHECK_TODAY_FROM = 45
 
 THRESHOLDS = {
     STAND_HR: ("daily median heart-rate change after standing (mean 60-180 s after minus 60 s before) at "
@@ -101,8 +105,9 @@ THRESHOLDS = {
     NIGHT: ("both of the last 2 nights (2 nights in a row) at z >= +2.5 against the 14-day baseline and +15% "
             "and 15 min above it: smaller z >= 2.5 -> 25, >= 4 -> 45 points; baseline SD at least 5% of its mean; "
             "nights worn 4 h+; 7+ valid nights in the 14-day baseline"),
-    "levels": ("watch from 15 points; check today from 45 points or any rule in its top band; "
-               "not enough data below 15 points when a rule could not score"),
+    "levels": ("worth a look this shift when one rule fires today; review this shift only when 2 different "
+               "rules fired in the last 3 days, one of them today; the score never sets the level; not enough "
+               "data when nothing fired and a rule could not score"),
 }
 MAX_POINTS = {STAND_HR: STAND_HR_BANDS[0][1], NIGHT: NIGHT_BANDS[0][1]}
 assert sum(MAX_POINTS.values()) == 100
@@ -334,12 +339,15 @@ def rule_night(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Option
     return out
 
 
-def level_for(score: int, top_band: bool) -> str:
-    if score >= CHECK_TODAY_FROM or top_band:
-        return LEVEL_CHECK
-    if score >= WATCH_FROM:
-        return LEVEL_WATCH
-    return LEVEL_LOW
+def level_for(fired_today: Iterable[str], fired_span: Iterable[str]) -> str:
+    """Level from which rules fired, never from the score: a single rule (even at its top band)
+    is worth a look; review needs 2 different rules in the last LEVEL_SPAN_DAYS days."""
+    today = set(fired_today)
+    if not today:
+        return LEVEL_LOW
+    if len(today | set(fired_span)) >= 2:
+        return LEVEL_REVIEW
+    return LEVEL_LOOK
 
 
 def suggested_check(level: str, scored_rules: Sequence[str], missing: Sequence[str] = ()) -> str:
@@ -350,10 +358,10 @@ def suggested_check(level: str, scored_rules: Sequence[str], missing: Sequence[s
     if level == LEVEL_LOW or not scored_rules:
         return "No extra check suggested; continue routine care."
     steps = "; ".join(AIDE_CHECKS[r] for r in RULES if r in scored_rules)
-    text = steps[0].upper() + steps[1:] + ". Tell the nurse what you see."
-    if level == LEVEL_CHECK:
-        return "Ask the nurse to review this resident today. " + text
-    return text
+    if level == LEVEL_REVIEW:
+        return "Ask the nurse to review this resident this shift. " + steps[0].upper() + steps[1:] + \
+            ". Tell the nurse what you see."
+    return "Worth a look this shift: " + steps + ". Tell the nurse what you see."
 
 
 def local_briefing(card: dict) -> str:
@@ -380,6 +388,14 @@ def windows(as_of: date) -> tuple[list[date], list[date]]:
     return recent, baseline
 
 
+def _rules_on(by_day: dict, as_of: date, record: dict) -> list[dict]:
+    """Every scored rule for one day, against that day's own recent and baseline windows."""
+    recent_days, baseline_days = windows(as_of)
+    recent = [by_day.get(d) for d in recent_days]
+    baseline = [by_day.get(d) for d in baseline_days]
+    return [rule_stand_hr(recent, baseline, record.get("hr_rule_off")), rule_night(recent, baseline)]
+
+
 def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetrics], as_of: date,
                    briefing: Optional[Callable[[dict], str]] = None, record: Optional[dict] = None) -> dict:
     """The alert card for one resident. Reads only that resident's metrics and record context
@@ -389,9 +405,16 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
     recent_days, baseline_days = windows(as_of)
     recent = [by_day.get(d) for d in recent_days]
     baseline = [by_day.get(d) for d in baseline_days]
-    rules = [rule_stand_hr(recent, baseline, record.get("hr_rule_off")), rule_night(recent, baseline)]
+    rules = _rules_on(by_day, as_of, record)
     score = sum(r["contribution"] for r in rules)
-    level = level_for(score, any(r["top_band"] for r in rules))
+    fired_today = [r["rule"] for r in rules if r["contribution"] > 0]
+    fired_span: dict[str, list[str]] = {}
+    for back in range(LEVEL_SPAN_DAYS - 1, -1, -1):
+        day = as_of - timedelta(days=back)
+        for r in (rules if back == 0 else _rules_on(by_day, day, record)):
+            if r["contribution"] > 0:
+                fired_span.setdefault(r["rule"], []).append(day.isoformat())
+    level = level_for(fired_today, fired_span)
     missing = [r["rule"] for r in rules if r["status"] == "not enough data"]
     if level == LEVEL_LOW and missing:
         # No data is not "nothing changed": keep the resident on the list.
@@ -405,7 +428,9 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "level": level,
         "rules": rules,
         "experimental": [experimental_sway(recent, baseline), experimental_balance(recent, baseline)],
-        "suggested_check": suggested_check(level, [r["rule"] for r in rules if r["contribution"] > 0], missing),
+        "suggested_check": suggested_check(level, list(fired_span) if level == LEVEL_REVIEW else fired_today,
+                                           missing),
+        "fired_last_3_days": fired_span,
         "briefing": "",
         "as_of": as_of.isoformat(),
         "recent_window": {"from": recent_days[0].isoformat(), "to": recent_days[-1].isoformat(), "hours": 48},
@@ -685,8 +710,8 @@ async def list_alerts(conn, include_low: bool = False) -> dict:
     q = """SELECT card FROM care_alerts WHERE as_of = (SELECT max(as_of) FROM care_alerts)"""
     if not include_low:
         q += " AND level <> 'low'"
-    order = (" ORDER BY CASE level WHEN 'check today' THEN 0 WHEN 'watch' THEN 1 WHEN 'not enough data' THEN 2"
-             " ELSE 3 END, score DESC, resident_id")
+    order = (" ORDER BY CASE level WHEN 'review this shift' THEN 0 WHEN 'worth a look this shift' THEN 1"
+             " WHEN 'not enough data' THEN 2 ELSE 3 END, score DESC, resident_id")
     rows = await (await conn.execute(q + order)).fetchall()
     cards = [r["card"] for r in rows]
     out = {"synthetic": True, "notice": NOTICE, "thresholds_status": ASSUMPTION,
