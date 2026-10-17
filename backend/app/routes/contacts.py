@@ -4,6 +4,8 @@ Wearer side (bearer wearer key):
   POST   /v1/contacts               create a single-use, 10-minute invite -> {t_me_link, web_link, qr_png}
   GET    /v1/contacts               list, including pending joins to approve
   POST   /v1/contacts/{id}/approve  contacts cannot add themselves
+  PUT    /v1/contacts/{id}/duress   {eligible}: choose who may receive a duress alert. With none
+                                    chosen, every approved contact can (research 1.15)
   DELETE /v1/contacts/{id}          silent: the contact is not told
 Contact side (capability token; cannot arm, see session status or ask for location):
   GET  /c/{token}                       consent / live page
@@ -47,6 +49,10 @@ class ContactIn(BaseModel):
 
 class JoinIn(BaseModel):
     name: Optional[str] = Field(default=None, max_length=60)
+
+
+class DuressIn(BaseModel):
+    eligible: bool
 
 
 class FollowupIn(BaseModel):
@@ -98,15 +104,19 @@ async def list_contacts(request: Request):
     async with db.connection() as conn:
         user = await require_wearer(request, conn)
         rows = await (await conn.execute(
-            """SELECT id, name, priority, channel, joined_at, approved_at FROM contacts
+            """SELECT id, name, priority, channel, joined_at, approved_at, duress_eligible FROM contacts
                 WHERE user_id = %s AND revoked_at IS NULL ORDER BY priority, id""", (user["id"],))).fetchall()
     approved = [r for r in rows if r["approved_at"]]
     order = {r["id"]: i + 1 for i, r in enumerate(sorted(approved, key=lambda r: (r["priority"], r["approved_at"], r["id"])))}
+    chosen = [r["id"] for r in sorted(approved, key=lambda r: order[r["id"]]) if r["duress_eligible"]]
     return {"contacts": [{
         "contact_id": r["id"], "name": r["name"], "priority": r["priority"], "channel": r["channel"],
         "status": "approved" if r["approved_at"] else ("pending_approval" if r["joined_at"] else "invited"),
-        "n": order.get(r["id"]),
-    } for r in rows]}
+        "n": order.get(r["id"]), "duress_eligible": bool(r["duress_eligible"]),
+    } for r in rows],
+        "duress_recipients": ({"mode": "chosen", "contact_ids": chosen} if chosen else
+                              {"mode": "all approved contacts (none chosen)",
+                               "contact_ids": [r["id"] for r in sorted(approved, key=lambda r: order[r["id"]])]})}
 
 
 @router.post("/v1/contacts/{contact_id}/approve")
@@ -132,6 +142,25 @@ async def approve(request: Request, contact_id: int):
                 (f"approve:{contact_id}", user["id"], contact_id,
                  messages.render("contact_approved", {"name": user["display_name"], "n": n})))
     return {"ok": True, "contact_id": contact_id, "n": n, "name": row["name"]}
+
+
+@router.put("/v1/contacts/{contact_id}/duress")
+async def set_duress_recipient(request: Request, contact_id: int, body: DuressIn):
+    """Wearer only. A contact kept out of duress alerts is never told about one."""
+    db = get_db(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            row = await (await conn.execute(
+                """UPDATE contacts SET duress_eligible = %s
+                    WHERE id = %s AND user_id = %s AND revoked_at IS NULL RETURNING id""",
+                (body.eligible, contact_id, user["id"]))).fetchone()
+            if row is None:
+                raise HTTPException(404, "no such contact")
+            await audit.append(conn, chain_key=audit.user_chain(user["id"]), actor="wearer",
+                               kind="contact_duress_recipient", user_id=user["id"],
+                               detail={"contact_id": contact_id, "eligible": body.eligible})
+    return {"ok": True, "contact_id": contact_id, "duress_eligible": body.eligible}
 
 
 @router.delete("/v1/contacts/{contact_id}")
@@ -218,15 +247,21 @@ async def join(request: Request, token: str, body: Optional[JoinIn] = None):
 
 
 async def _alert_for_contact(conn, contact: dict) -> Optional[dict]:
-    """The open alert this contact has been told about, if any."""
+    """The open alert this contact has been told about, if any. A duress alert does not exist for a
+    contact the wearer keeps out of duress alerts, even one told about it before it turned into
+    duress: their page and buttons answer exactly as when no alert is open."""
     if contact["approved_at"] is None:
         return None
-    return await (await conn.execute(
+    alert = await (await conn.execute(
         """SELECT a.*, s.state, s.user_id FROM alerts a
              JOIN sessions s ON s.id = a.session_id
              JOIN alert_recipients r ON r.alert_id = a.id AND r.contact_id = %s
             WHERE s.user_id = %s AND a.status IN ('OPEN', 'ACKED')
             ORDER BY a.id DESC LIMIT 1""", (contact["id"], contact["user_id"]))).fetchone()
+    if alert is not None and alert["kind"] == states.DURESS and \
+            contact["id"] not in await engine.duress_ladder_ids(conn, contact["user_id"]):
+        return None
+    return alert
 
 
 @router.get("/v1/contact/{token}/status")
@@ -255,7 +290,9 @@ async def contact_status(request: Request, token: str):
         else:
             # Only the contact at the current level can pass it on (states._on_contact_pass);
             # earlier contacts who are re-pinged can still take it on.
-            ladder = [c["id"] for c in await engine.approved_contacts(conn, contact["user_id"])]
+            ladder = ([c for c in await engine.duress_ladder_ids(conn, contact["user_id"])]
+                      if alert["kind"] == states.DURESS else
+                      [c["id"] for c in await engine.approved_contacts(conn, contact["user_id"])])
             current = (not alert["is_final"] and 0 < alert["level"] <= len(ladder)
                        and ladder[alert["level"] - 1] == contact["id"])
             actions = ["ack"] + (["pass"] if current else [])

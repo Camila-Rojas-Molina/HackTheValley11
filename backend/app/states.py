@@ -15,6 +15,10 @@ a clock or calls a model, so every safety rule below is unit-testable:
   matching OK action; the alert is masked, and from then on the wearer sees a
   twin session that used the real PIN (see "masked duress: the twin").
 * LOST_CONTACT has its own wording and never stops pending deadlines.
+* A duress alert goes only to the contacts the wearer chose as duress recipients (all approved
+  contacts when she chose none). A contact kept out of the list is never told about it, cannot
+  take, pass or close it, and an ack it held before the alert turned into duress can be taken
+  over by a duress contact (research 1.15).
 
 `_finish` re-checks the first three rules on every decision and raises
 InvariantViolation, so a coding mistake fails closed instead of escalating
@@ -172,6 +176,9 @@ class Snapshot:
     version: int
     timings: Timings
     contacts: tuple[int, ...] = ()  # approved, not revoked, escalation order
+    # Approved contacts the wearer chose as duress recipients, escalation order. Empty: every
+    # approved contact can receive a duress alert (see duress_ladder).
+    duress_contacts: tuple[int, ...] = ()
     alert: Optional[AlertView] = None  # the open alert, if any
     challenge_n: Optional[int] = None
     prompt_cause: Optional[str] = None
@@ -294,12 +301,36 @@ def _window(snap: Snapshot) -> float:
     return snap.timings.prompt_window_s * max(1.0, min(10.0, snap.window_multiplier))
 
 
-def _recipients(snap: Snapshot) -> list[int]:
-    """Contacts already told about the open alert, still approved."""
+def duress_ladder(snap: Snapshot) -> tuple[int, ...]:
+    """Who a duress alert escalates through: the chosen duress contacts that are still approved,
+    or every approved contact when the wearer chose none."""
+    chosen = tuple(c for c in snap.duress_contacts if c in snap.contacts)
+    return chosen or snap.contacts
+
+
+def ladder(snap: Snapshot, kind: Optional[str]) -> tuple[int, ...]:
+    """The escalation order for an alert of this kind."""
+    return duress_ladder(snap) if kind == DURESS else snap.contacts
+
+
+def _recipients(snap: Snapshot, kind: Optional[str] = None) -> list[int]:
+    """Contacts already told about the open alert who may still hear about it: approved, and for a
+    duress alert on the duress ladder (a contact told before it turned into duress hears no more)."""
     if snap.alert is None:
         return []
-    approved = set(snap.contacts)
-    return [c for c in snap.alert.recipients if c in approved]
+    allowed = set(ladder(snap, kind or snap.alert.kind))
+    return [c for c in snap.alert.recipients if c in allowed]
+
+
+def _duress_upgrade_targets(snap: Snapshot) -> list[int]:
+    """Who hears about an alert that turns into duress: duress contacts already told about it, and
+    the duress contacts up to its current level (as if the duress ladder had run to it)."""
+    level = snap.alert.level if snap.alert is not None else 1
+    out = _recipients(snap, DURESS)
+    for c in duress_ladder(snap)[:max(1, level)]:
+        if c not in out:
+            out.append(c)
+    return out
 
 
 def _alert_template(kind: str, final: bool) -> str:
@@ -342,9 +373,9 @@ def _back_to_armed(snap: Snapshot, d: Decision, schedule: bool = True) -> None:
 def _go_level(snap: Snapshot, d: Decision, level: int, kind: str) -> None:
     """Move the escalation ladder to `level` (or FINAL past the last contact)."""
     t = snap.timings
-    contacts = list(snap.contacts)
+    contacts = list(ladder(snap, kind))
     if level > len(contacts):
-        _enter_final(snap, d, len(contacts) + 1)
+        _enter_final(snap, d, len(contacts) + 1, kind)
         return
     d.to_state = level_state(level)
     d.changed = True
@@ -364,7 +395,7 @@ def _go_level(snap: Snapshot, d: Decision, level: int, kind: str) -> None:
     d.audit.append(AuditEntry("escalated", {"level": level, "alert_kind": kind, "contact_id": target}))
 
 
-def _enter_final(snap: Snapshot, d: Decision, level: int) -> None:
+def _enter_final(snap: Snapshot, d: Decision, level: int, kind: Optional[str] = None) -> None:
     d.to_state = FINAL
     d.changed = True
     d.cancel_state_timers = True
@@ -372,7 +403,7 @@ def _enter_final(snap: Snapshot, d: Decision, level: int) -> None:
     d.prompt_cause = None
     d.retry_used = False
     d.alert_ops.append(AlertOp("level", level=level, is_final=True))
-    for c in snap.contacts:
+    for c in ladder(snap, kind):
         d.notify.append(Notify("contact", "alert_final", contact_id=c, buttons="alert"))
     d.timers.append(TimerSpec(RENOTIFY, snap.timings.renotify_s))
     # Simulated only: logged, never placed. There is no code path that calls anyone.
@@ -528,7 +559,7 @@ def _duress_squeeze(snap: Snapshot, ev: Event, d: Decision) -> None:
         # Same wearer output as a late plain squeeze; contacts get the help request.
         if snap.alert is not None and snap.alert.kind != DURESS:
             d.alert_ops.append(AlertOp("upgrade", kind=DURESS))
-        for c in _recipients(snap):
+        for c in _duress_upgrade_targets(snap):
             d.notify.append(Notify("contact", "alert_duress", contact_id=c, buttons="alert"))
         d.notify.append(Notify("wearer", _wearer_ack_template(snap)))
         d.audit.append(_late_entry("device", ev.late))
@@ -613,7 +644,7 @@ def _on_pin_duress(snap: Snapshot, d: Decision, end: bool) -> None:
     elif is_alerting(s):
         alert = snap.alert
         if alert is not None and alert.kind == DURESS:
-            for c in _recipients(snap):
+            for c in _duress_upgrade_targets(snap):
                 d.notify.append(Notify("contact", "alert_duress", contact_id=c, buttons="alert"))
             d.audit.append(AuditEntry("duress", {"via": "pin", "action": action}, masked=True))
         else:
@@ -621,7 +652,7 @@ def _on_pin_duress(snap: Snapshot, d: Decision, end: bool) -> None:
             # continues underneath and the twin (the false alarm) is what the wearer sees.
             d.audit.append(AuditEntry("duress", {"via": "pin", "action": action}, masked=True))
             d.alert_ops.append(AlertOp("upgrade", kind=DURESS, masked=True))
-            for c in _recipients(snap):
+            for c in _duress_upgrade_targets(snap):
                 d.notify.append(Notify("contact", "alert_duress", contact_id=c, buttons="alert"))
     else:
         return
@@ -647,11 +678,12 @@ def _on_renotify(snap: Snapshot, d: Decision) -> None:
     if alert.renotify_count >= t.renotify_cap:
         d.reply = "capped"
         return
+    order = ladder(snap, alert.kind)
     if snap.state == FINAL:
-        targets = list(snap.contacts)
+        targets = list(order)
     else:
         lvl = alert.level
-        targets = [snap.contacts[lvl - 1]] if 0 < lvl <= len(snap.contacts) else []
+        targets = [order[lvl - 1]] if 0 < lvl <= len(order) else []
     template = _alert_template(alert.kind, snap.state == FINAL)
     for c in targets:
         d.notify.append(Notify("contact", template, contact_id=c, buttons="alert"))
@@ -677,6 +709,18 @@ def _on_contact_ack(snap: Snapshot, ev: Event, d: Decision) -> None:
         d.timers.append(TimerSpec(FOLLOWUP_TIMEOUT, snap.timings.followup_s))
         d.audit.append(AuditEntry("acked", {"contact_id": c}))
         d.reply = "acked"
+    elif (snap.state == ACKED and alert is not None and alert.kind == DURESS
+          and alert.acked_by not in duress_ladder(snap) and c in _recipients(snap)):
+        # The ack was taken before the alert turned into duress, by a contact the wearer keeps out
+        # of duress alerts: a duress contact takes it over (and only they can confirm she's safe).
+        d.to_state = ACKED
+        d.changed = True
+        d.cancel_state_timers = True
+        d.alert_ops.append(AlertOp("ack", contact_id=c))
+        d.notify.append(Notify("contact", "ack_thanks", contact_id=c, buttons="followup"))
+        d.timers.append(TimerSpec(FOLLOWUP_TIMEOUT, snap.timings.followup_s))
+        d.audit.append(AuditEntry("acked", {"contact_id": c, "took_over": True}))
+        d.reply = "acked"
     elif snap.state == ACKED:
         d.reply = "already_handled"
     else:
@@ -685,8 +729,9 @@ def _on_contact_ack(snap: Snapshot, ev: Event, d: Decision) -> None:
 
 def _on_contact_pass(snap: Snapshot, ev: Event, d: Decision) -> None:
     alert = snap.alert
+    order = ladder(snap, alert.kind) if alert is not None else ()
     if (is_escalated(snap.state) and snap.state != FINAL and alert is not None
-            and 0 < alert.level <= len(snap.contacts) and snap.contacts[alert.level - 1] == ev.contact_id):
+            and 0 < alert.level <= len(order) and order[alert.level - 1] == ev.contact_id):
         d.audit.append(AuditEntry("passed", {"contact_id": ev.contact_id, "level": alert.level}))
         _go_level(snap, d, alert.level + 1, alert.kind)
         d.reply = "passed"
@@ -697,7 +742,7 @@ def _on_contact_pass(snap: Snapshot, ev: Event, d: Decision) -> None:
 def _on_contact_safe(snap: Snapshot, ev: Event, d: Decision) -> None:
     alert = snap.alert
     if not (snap.state == ACKED and alert is not None and ev.contact_id is not None
-            and ev.contact_id == alert.acked_by):
+            and ev.contact_id == alert.acked_by and ev.contact_id in ladder(snap, alert.kind)):
         # An acknowledgement alone never closes an alert, and only the contact
         # who took it on can confirm she's safe.
         d.reply = "ignored"
@@ -730,11 +775,11 @@ def _on_followup_missed(snap: Snapshot, ev: Event, d: Decision) -> None:
     d.audit.append(AuditEntry("followup_missed" if ev.kind == FOLLOWUP_TIMEOUT else "cant_reach",
                               {"contact_id": acker}))
     if alert.is_final:
-        _enter_final(snap, d, alert.level)
+        _enter_final(snap, d, alert.level, alert.kind)
     else:
         _go_level(snap, d, alert.level + 1, alert.kind)
-    # Re-ping the contact who acknowledged.
-    if acker is not None and acker in snap.contacts and not any(
+    # Re-ping the contact who acknowledged (never one kept out of a duress alert).
+    if acker is not None and acker in ladder(snap, alert.kind) and not any(
             n.to == "contact" and n.contact_id == acker for n in d.notify):
         tmpl = _alert_template(alert.kind, d.to_state == FINAL)
         d.notify.append(Notify("contact", tmpl, contact_id=acker, buttons="alert"))

@@ -88,9 +88,17 @@ async def load_secret(conn, settings: Settings) -> str:
 
 
 # --- loading ----------------------------------------------------------------
+async def duress_ladder_ids(conn, user_id) -> list[int]:
+    """Contacts a duress alert may reach: the chosen duress recipients, or every approved contact
+    when the wearer chose none (states.duress_ladder)."""
+    contacts = await approved_contacts(conn, user_id)
+    chosen = [c["id"] for c in contacts if c["duress_eligible"]]
+    return chosen or [c["id"] for c in contacts]
+
+
 async def approved_contacts(conn, user_id) -> list[dict]:
     cur = await conn.execute(
-        """SELECT id, name, priority, channel, telegram_chat_id, web_token_nonce
+        """SELECT id, name, priority, channel, telegram_chat_id, web_token_nonce, duress_eligible
              FROM contacts
             WHERE user_id = %s AND approved_at IS NOT NULL AND revoked_at IS NULL
             ORDER BY priority, approved_at, id""", (user_id,))
@@ -128,6 +136,7 @@ def build_snapshot(sess: dict, alert: Optional[dict], contacts: list[dict], reci
     return Snapshot(
         state=sess["state"], public_state=sess["public_state"], version=sess["version"],
         timings=settings.timings(sess["profile"]), contacts=tuple(c["id"] for c in contacts),
+        duress_contacts=tuple(c["id"] for c in contacts if c["duress_eligible"]),
         alert=view, challenge_n=sess["challenge_n"], prompt_cause=sess["prompt_cause"],
         retry_used=sess["retry_used"], link_state=sess["link_state"],
         lost_contact_told=sess["lost_contact_told"], window_multiplier=float(sess["window_multiplier"]))

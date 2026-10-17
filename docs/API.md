@@ -378,10 +378,29 @@ in line.
 ### `GET /v1/contacts`
 
 Every contact, with `status` `invited`, `pending_approval` or `approved`. `n` is the position in the
-alert ladder for approved contacts.
+alert ladder for approved contacts. `duress_eligible` and `duress_recipients` show who a duress alert can
+reach (see `PUT /v1/contacts/{contact_id}/duress`).
 
 ```json
-{"contacts": [{"contact_id": 1, "name": "Sam", "priority": 1, "channel": "web", "status": "pending_approval", "n": null}]}
+{"contacts": [{"contact_id": 1, "name": "Sam", "priority": 1, "channel": "web", "status": "approved", "n": 1,
+               "duress_eligible": false},
+              {"contact_id": 2, "name": "Alex", "priority": 2, "channel": "web", "status": "approved", "n": 2,
+               "duress_eligible": true}],
+ "duress_recipients": {"mode": "chosen", "contact_ids": [2]}}
+```
+
+### `PUT /v1/contacts/{contact_id}/duress`
+
+Wearer key. `{"eligible": true}` adds a contact to the duress recipients; `false` takes them off. A duress
+alert (duress squeeze or duress PIN) escalates only through the chosen duress recipients, in ladder order.
+**If the wearer chooses none, every approved contact can receive a duress alert** (`duress_recipients.mode`
+is `"all approved contacts (none chosen)"`). A contact kept out of the list is never told about a duress
+alert, cannot take, pass on or close it, and their page and buttons answer exactly as when no alert is open,
+even if they were told about the same alert before it turned into duress; a duress contact can take over
+an "I'm on it" they held. `404` for a contact that is not the wearer's.
+
+```json
+{"ok": true, "contact_id": 2, "duress_eligible": true}
 ```
 
 ### `POST /v1/contacts/{contact_id}/approve`
