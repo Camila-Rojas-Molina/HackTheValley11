@@ -28,9 +28,9 @@ def shipped_files():
     for extra in (REPO / "README.md", BACKEND / "README.md", REPO / ".env.example", BACKEND / ".env.example"):
         if extra.exists():
             files.append(extra)
-    docs = REPO / "docs"
-    if docs.exists():
-        files += [p for p in docs.rglob("*") if p.is_file() and p.suffix in SCANNED_SUFFIXES]
+    for folder in (REPO / "docs", REPO / ".github"):  # API docs, and the CI workflow's step names
+        if folder.exists():
+            files += [p for p in folder.rglob("*") if p.is_file() and p.suffix in SCANNED_SUFFIXES]
     return [f for f in files if "__pycache__" not in f.parts]
 
 

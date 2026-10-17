@@ -37,6 +37,13 @@ class HeartbeatIn(BaseModel):
     offbody: Optional[bool] = None
     feats: Optional[list] = None
 
+    @field_validator("enmo60_mg")
+    @classmethod
+    def _storable_enmo(cls, v: Optional[float]) -> Optional[float]:
+        # Stored as real: a tiny value such as 1e-67 underflows it (a 422 the bridge would drop, so the
+        # lease would lapse). Thousandths of a milli-g are far below the sensor's resolution.
+        return None if v is None else round(v, 3)
+
 
 def _finite(value) -> bool:
     if isinstance(value, float):
