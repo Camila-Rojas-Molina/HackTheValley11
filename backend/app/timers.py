@@ -14,7 +14,7 @@ import logging
 import time
 from typing import Optional
 
-from . import engine, sensors, states
+from . import engine, sensors, states, timeseries
 from .engine import Ctx
 from .states import Event
 
@@ -113,6 +113,9 @@ async def timer_worker(db, ctx: Ctx, stop: asyncio.Event, tick_s: float = 1.0) -
             if time.monotonic() - last_sensor >= sensors.SENSOR_TICK_S:
                 last_sensor = time.monotonic()
                 await sensors.tick(db, ctx)
+            # Plain PostgreSQL has no scheduler: raw-row retention (night_out 48 h) runs from here,
+            # at most every 10 minutes, whatever the ingest path. A no-op on TimescaleDB.
+            await timeseries.maybe_prune(db)
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -443,3 +443,27 @@ async def test_operator_endpoints(client, db):
             """SELECT bool_and(simulated AND source = 'synthetic') AS ok FROM hr_samples WHERE user_id = %s""",
             (w.user_id,))).fetchone()
     assert tagged["ok"] is True
+
+
+async def test_plain_path_prunes_night_out_heart_rate_without_any_telemetry_batch(client, db, ctx):
+    """POST /v1/hr is the KAZE heart-rate path; pruning must not wait for a telemetry batch."""
+    import asyncio
+    import uuid as _uuid
+
+    from app import timeseries, timers
+    async with db.connection() as conn:
+        if (await timeseries.setup(conn))["mode"] != "plain":
+            pytest.skip("plain PostgreSQL path only")
+        uid = str(_uuid.uuid4())
+        await conn.execute(
+            """INSERT INTO hr_samples (time, user_id, source, bpm, profile)
+               VALUES (now() - interval '72 hours', %s, 'test', 70, 'night_out')""", (uid,))
+    timeseries._last_prune.clear()
+    stop = asyncio.Event()
+    worker = asyncio.create_task(timers.timer_worker(db, ctx, stop, tick_s=0.1))
+    await asyncio.sleep(0.5)
+    stop.set()
+    await worker
+    async with db.connection() as conn:
+        n = (await (await conn.execute("SELECT count(*) AS n FROM hr_samples WHERE user_id = %s", (uid,))).fetchone())["n"]
+    assert n == 0

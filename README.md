@@ -379,7 +379,7 @@ imports nothing from the state machine, and the z-score is informational only (t
   `DO` block that catches errors. Every TimescaleDB call sits in one `DO` block behind a `pg_extension`
   check and runs as one sub-transaction: if any part fails, it is rolled back, the plain tables and views
   are created instead and `timeseries_setup.note` says why. With no scheduler, the app prunes raw rows
-  itself, at most every 10 minutes, after an ingest. The plain rollups are views, so they only cover raw
+  itself, at most every 10 minutes, from the timer worker. The plain rollups are views, so they only cover raw
   rows still inside retention.
 
 **Check it on Tiger Cloud** (after the 10-minute checklist above, with `ADMIN_KEY` set in your shell):

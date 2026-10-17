@@ -339,7 +339,8 @@ async def prune(conn, *, care: bool = True) -> None:
 
 
 async def maybe_prune(db) -> bool:
-    """Plain PostgreSQL has no scheduler: prune at most every 10 minutes per database.
+    """Plain PostgreSQL has no scheduler: prune at most every 10 minutes per database (called by
+    the timer worker and after a telemetry batch).
 
     On TimescaleDB the stillhere_retention_job and the chunk retention policies do this, so
     nothing runs here.
