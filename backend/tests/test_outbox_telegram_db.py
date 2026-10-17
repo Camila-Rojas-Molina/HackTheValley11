@@ -324,3 +324,102 @@ async def test_outbox_stops_retrying_a_permanent_rejection(client, db, ctx):
     async with db.connection() as conn:
         r = await (await conn.execute("SELECT status, attempts FROM outbox WHERE id = %s", (row["id"],))).fetchone()
     assert r["status"] == "failed" and r["attempts"] == ob.MAX_ATTEMPTS
+
+
+async def _telegram_contact_at_l1(client, db, ctx, chat_id):
+    w = await make_world(client, db, contacts=2)
+    c1 = w.contacts[0]
+    async with db.connection() as conn:
+        await conn.execute("UPDATE contacts SET telegram_chat_id = %s WHERE id = %s", (chat_id, c1["id"]))
+    await to_state(client, db, ctx, w, "ESCALATED_L1")
+    alert = await open_alert(db, w.session_id)
+    return w, c1, alert
+
+
+async def test_contact_tap_racing_the_ack_timeout_is_not_lost(client, db, ctx, monkeypatch):
+    """The tap and the timer lock the session row first, so they queue instead of deadlocking."""
+    from app import messages, timers
+    w, c1, alert = await _telegram_contact_at_l1(client, db, ctx, 7101)
+    async with db.connection() as conn:
+        await conn.execute("UPDATE timers SET fire_at = now() WHERE session_id = %s AND kind = 'ACK_TIMEOUT'",
+                           (w.session_id,))
+        uid = await telegram.get_offset(conn) + 1
+    claimed, go = asyncio.Event(), asyncio.Event()
+    real_apply = engine.apply
+
+    async def paused_apply(conn, session_id, event, **kw):
+        if kw.get("actor") == "timer":  # the timer worker has claimed its timer (and the session row)
+            claimed.set()
+            await go.wait()
+        return await real_apply(conn, session_id, event, **kw)
+    monkeypatch.setattr(engine, "apply", paused_apply)
+
+    async def timer():
+        async with db.connection() as conn:
+            return await timers.fire_one(conn, ctx, session_id=w.session_id)
+    t = asyncio.create_task(timer())
+    await asyncio.wait_for(claimed.wait(), 5)
+    tap = {"update_id": uid, "callback_query": {
+        "id": "cq-race", "from": {"id": 7101}, "data": f"ack:{alert['id']}:{c1['id']}",
+        "message": {"message_id": 9, "chat": {"id": 7101}, "text": "StillHere: alert"}}}
+    h = asyncio.create_task(telegram.handle_update(db, ctx, tap))
+    await asyncio.sleep(0.4)  # the tap is now waiting behind the timer's transaction
+    go.set()
+    answer = await asyncio.wait_for(h, 15)
+    await asyncio.wait_for(t, 15)
+    assert answer is not None and answer["text"] == messages.CALLBACK_ANSWERS["acked"]
+    assert (await session_row(db, w.session_id))["state"] == states.ACKED
+    async with db.connection() as conn:
+        n = (await (await conn.execute("SELECT count(*) AS n FROM acks WHERE telegram_update_id = %s",
+                                       (uid,))).fetchone())["n"]
+    assert n == 1
+
+
+async def test_a_transient_database_error_leaves_the_update_for_a_retry(client, db, ctx, monkeypatch):
+    import psycopg
+    w, c1, alert = await _telegram_contact_at_l1(client, db, ctx, 7102)
+    async with db.connection() as conn:
+        uid = await telegram.get_offset(conn) + 1
+
+    async def boom(conn, ctx_, update):
+        raise psycopg.errors.SerializationFailure("simulated")
+    monkeypatch.setattr(telegram, "_handle_callback", boom)
+    tap = {"update_id": uid, "callback_query": {"id": "cq-x", "from": {"id": 7102},
+                                                "data": f"ack:{alert['id']}:{c1['id']}", "message": {}}}
+    try:
+        await telegram.handle_update(db, ctx, tap)
+        raise AssertionError("a transient error must not be swallowed")
+    except psycopg.OperationalError:
+        pass
+    async with db.connection() as conn:
+        assert await telegram.get_offset(conn) == uid - 1  # not advanced: getUpdates returns it again
+
+
+async def test_live_page_tap_racing_the_ack_timeout_is_not_lost(client, db, ctx, monkeypatch):
+    from app import timers
+    w, c1, alert = await _telegram_contact_at_l1(client, db, ctx, 7103)
+    async with db.connection() as conn:
+        await conn.execute("UPDATE timers SET fire_at = now() WHERE session_id = %s AND kind = 'ACK_TIMEOUT'",
+                           (w.session_id,))
+    claimed, go = asyncio.Event(), asyncio.Event()
+    real_apply = engine.apply
+
+    async def paused_apply(conn, session_id, event, **kw):
+        if kw.get("actor") == "timer":
+            claimed.set()
+            await go.wait()
+        return await real_apply(conn, session_id, event, **kw)
+    monkeypatch.setattr(engine, "apply", paused_apply)
+
+    async def timer():
+        async with db.connection() as conn:
+            return await timers.fire_one(conn, ctx, session_id=w.session_id)
+    t = asyncio.create_task(timer())
+    await asyncio.wait_for(claimed.wait(), 5)
+    h = asyncio.create_task(client.post(f"/v1/contact/{c1['token']}/ack"))
+    await asyncio.sleep(0.4)
+    go.set()
+    r = await asyncio.wait_for(h, 15)
+    await asyncio.wait_for(t, 15)
+    assert r.status_code == 200 and r.json() == {"ok": True, "result": "acked"}
+    assert (await session_row(db, w.session_id))["state"] == states.ACKED

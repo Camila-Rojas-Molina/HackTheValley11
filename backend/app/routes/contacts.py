@@ -290,6 +290,8 @@ async def _contact_event(request: Request, token: str, event_kind: str, action: 
             alert = await _alert_for_contact(conn, contact)
             if alert is None:
                 raise HTTPException(409, "no active alert")
+            # Session lock before the acks row (same order as the timer worker; see telegram.py).
+            await conn.execute("SELECT 1 FROM sessions WHERE id = %s FOR UPDATE", (alert["session_id"],))
             ack = await (await conn.execute(
                 """INSERT INTO acks (alert_id, contact_id, action, source) VALUES (%s, %s, %s, 'web')
                    RETURNING id""", (alert["id"], contact["id"], action))).fetchone()

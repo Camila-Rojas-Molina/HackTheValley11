@@ -69,6 +69,10 @@ async def handle_update(db, ctx: Ctx, update: dict) -> Optional[dict]:
                         answer = await _handle_callback(conn, ctx, update)
                     elif "message" in update:
                         await _handle_message(conn, ctx, update)
+            except psycopg.OperationalError:
+                # Lock conflict, serialization failure, lost connection: not the update's fault.
+                # Keep the offset so the same update is fetched and processed again.
+                raise
             except Exception:
                 log.exception("telegram update %s failed; skipping it", uid)
                 answer = None
@@ -148,6 +152,9 @@ async def _handle_callback(conn, ctx: Ctx, update: dict) -> dict:
         (alert_id,))).fetchone()
     if contact is None or alert is None:
         return answer
+    # Lock the session first, as the timer worker and every other path do. Inserting into acks
+    # first would take a key-share lock on the alert before the session lock (deadlock risk).
+    await conn.execute("SELECT 1 FROM sessions WHERE id = %s FOR UPDATE", (alert["session_id"],))
     ins = await (await conn.execute(
         """INSERT INTO acks (alert_id, contact_id, action, source, telegram_update_id)
            VALUES (%s, %s, %s, 'telegram', %s) ON CONFLICT (telegram_update_id) DO NOTHING RETURNING id""",
