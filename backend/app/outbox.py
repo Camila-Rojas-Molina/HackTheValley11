@@ -125,8 +125,11 @@ async def release(db, row: dict, delay_s: float, error: Optional[str] = None, co
              row.get("claimed_by")))
 
 
+REMOVED = "removed"
+
+
 async def _chat_id(db, row: dict) -> tuple[Optional[int], str]:
-    """(chat_id, fallback channel) for a row."""
+    """(chat_id, fallback channel) for a row; channel REMOVED for a contact the wearer removed."""
     if row["recipient"] == "chat":
         return row["chat_id"], "log"
     async with db.connection() as conn:
@@ -134,9 +137,20 @@ async def _chat_id(db, row: dict) -> tuple[Optional[int], str]:
             r = await (await conn.execute("SELECT telegram_chat_id FROM users WHERE id = %s",
                                           (row["user_id"],))).fetchone()
             return (r["telegram_chat_id"] if r else None), "log"
-        r = await (await conn.execute("SELECT telegram_chat_id FROM contacts WHERE id = %s",
+        r = await (await conn.execute("SELECT telegram_chat_id, revoked_at FROM contacts WHERE id = %s",
                                       (row["contact_id"],))).fetchone()
-        return (r["telegram_chat_id"] if r else None), "web"
+        if r is None or r["revoked_at"] is not None:
+            return None, REMOVED
+        return r["telegram_chat_id"], "web"
+
+
+async def drop(db, row: dict, reason: str) -> None:
+    """Never send this row (its contact was removed)."""
+    async with db.connection() as conn:
+        await conn.execute(
+            """UPDATE outbox SET status = 'failed', last_error = %s, locked_until = NULL
+                WHERE id = %s AND status = 'sending' AND claimed_by IS NOT DISTINCT FROM %s""",
+            (reason, row["id"], row.get("claimed_by")))
 
 
 class Sender:
@@ -150,6 +164,9 @@ class Sender:
 
     async def deliver(self, row: dict) -> str:
         chat_id, fallback = await _chat_id(self.db, row)
+        if fallback == REMOVED:
+            await drop(self.db, row, "contact removed")
+            return REMOVED
         if self.api is None or chat_id is None:
             channel = fallback
             if channel == "log":

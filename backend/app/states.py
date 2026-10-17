@@ -181,6 +181,7 @@ class AlertView:
     renotify_count: int = 0
     recipients: tuple[int, ...] = ()
     id: Optional[int] = None
+    ackers: tuple[int, ...] = ()  # contacts who already took this alert on ("I'm on it")
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,7 @@ class AlertOp:
     contact_id: Optional[int] = None
     status: Optional[str] = None
     by: Optional[str] = None
+    keep_count: bool = False  # level: back to FINAL, the renotify budget is not refilled
 
 
 @dataclass(frozen=True)
@@ -427,17 +429,25 @@ def _go_level(snap: Snapshot, d: Decision, level: int, kind: str) -> None:
     d.audit.append(AuditEntry("escalated", {"level": level, "alert_kind": kind, "contact_id": target}))
 
 
-def _enter_final(snap: Snapshot, d: Decision, level: int, kind: Optional[str] = None) -> None:
+def _enter_final(snap: Snapshot, d: Decision, level: int, kind: Optional[str] = None,
+                 again: bool = False) -> None:
+    """FINAL. `again`: back to FINAL (its acknowledger could not reach her). That re-sends the final
+    alert to everyone as one renotify of the capped budget, so a contact looping "I'm on it" and
+    "can't reach her" cannot flood the others."""
     d.to_state = FINAL
     d.changed = True
     d.cancel_state_timers = True
     d.challenge_n = None
     d.prompt_cause = None
     d.retry_used = False
-    d.alert_ops.append(AlertOp("level", level=level, is_final=True))
-    for c in ladder(snap, kind):
-        d.notify.append(Notify("contact", "alert_final", contact_id=c, buttons="alert"))
-    d.timers.append(TimerSpec(RENOTIFY, snap.timings.renotify_s))
+    d.alert_ops.append(AlertOp("level", level=level, is_final=True, keep_count=again))
+    spent = snap.alert.renotify_count if (again and snap.alert is not None) else 0
+    if spent < snap.timings.renotify_cap:
+        for c in ladder(snap, kind):
+            d.notify.append(Notify("contact", "alert_final", contact_id=c, buttons="alert"))
+        if again:
+            d.alert_ops.append(AlertOp("renotify"))
+        d.timers.append(TimerSpec(RENOTIFY, snap.timings.renotify_s))
     # Simulated only: logged, never placed. There is no code path that calls anyone.
     d.audit.append(AuditEntry("emergency_services_simulated", {"placed": False, "banner": FINAL_BANNER}))
 
@@ -737,9 +747,10 @@ def _on_contact_ack(snap: Snapshot, ev: Event, d: Decision) -> None:
         d.changed = True
         d.cancel_state_timers = True
         d.alert_ops.append(AlertOp("ack", contact_id=c))
-        for r in _recipients(snap):
-            if r != c:
-                d.notify.append(Notify("contact", "handling", contact_id=r, params={"contact_id": c}))
+        if c not in alert.ackers:  # a contact taking it on again is not announced again
+            for r in _recipients(snap):
+                if r != c:
+                    d.notify.append(Notify("contact", "handling", contact_id=r, params={"contact_id": c}))
         d.notify.append(Notify("contact", "ack_thanks", contact_id=c, buttons="followup"))
         d.timers.append(TimerSpec(FOLLOWUP_TIMEOUT, snap.timings.followup_s))
         d.audit.append(AuditEntry("acked", {"contact_id": c}))
@@ -809,7 +820,7 @@ def _on_followup_missed(snap: Snapshot, ev: Event, d: Decision) -> None:
     d.audit.append(AuditEntry("followup_missed" if ev.kind == FOLLOWUP_TIMEOUT else "cant_reach",
                               {"contact_id": acker}))
     if alert.is_final:
-        _enter_final(snap, d, alert.level, alert.kind)
+        _enter_final(snap, d, alert.level, alert.kind, again=True)
     else:
         _go_level(snap, d, alert.level + 1, alert.kind)
     # Re-ping the contact who acknowledged (never one kept out of a duress alert).

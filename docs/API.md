@@ -34,6 +34,8 @@ tokens and timestamps shortened.
 | Senior mode (`/v1/care/*`) | none: every row is synthetic, enforced by a CHECK constraint (feedback buttons included) | `404`, `422` |
 
 - **Database down:** every endpoint that needs the database answers `503 {"ok":false,"error":"database unavailable"}`.
+- **Input the database cannot store** (a NUL character in text, a number out of range, an `X-Seq` outside
+  0 to 2^63 − 1): `422`, never a `500`, so a device or bridge does not retry it forever. Nothing is stored.
 - **Canonical JSON:** device replies and the wearer's PIN and check-in replies are serialised with sorted keys
   and no spaces, so equal replies are equal bytes.
 - **Byte-identical PINs:** the real PIN and the duress PIN produce the same status code and the same bytes on
@@ -264,7 +266,7 @@ Arm a session.
 | `interval_s` | 10–86400; default 60 s demo, 30 min real |
 | `duration_s` | 30–86400; overrides the preset's length |
 | `window_multiplier` | 1–10; stretches every response window |
-| `device_id` | default: the wearer's first device |
+| `device_id` | one of the wearer's own devices (`404 {"detail":"no such device"}` otherwise); default: her first device |
 
 ```json
 {"session_id": "9a09f145-…", "state_public": "ARMED", "profile": "demo", "interval_s": 60,
@@ -272,7 +274,8 @@ Arm a session.
  "who_can_be_alerted": [{"n": 1, "name": "Sam", "contact_id": 1}, {"n": 2, "name": "Jo", "contact_id": 2}]}
 ```
 
-`409 {"detail":{"error":"already_armed","session_id":"…"}}` if a session is already running.
+`409 {"detail":{"error":"already_armed","session_id":"…"}}` if a session is already running, also when two arm
+requests arrive at once (one gets `200`, the other `409`).
 
 ### `GET /v1/sessions/{session_id}`
 
@@ -444,12 +447,15 @@ Contacts cannot add themselves; only the wearer approves. `404` if the contact h
 
 ### `DELETE /v1/contacts/{contact_id}`
 
-Silent removal: the contact is not told, and their pending messages are dropped. Reply `{"ok": true}`.
+Silent removal: the contact is not told, their pending messages are dropped (a message already being sent
+when they are removed is not retried if that send fails), and their location links stop working (`410`); the
+other contacts keep theirs. Reply `{"ok": true}`.
 
 ### `DELETE /v1/contacts`
 
 Wearer key. Removes every contact (approved, pending and invited) in one action, silently, like Apple
-Safety Check's emergency reset: nobody is told and nothing still queued for them is sent. An open alert is
+Safety Check's emergency reset: nobody is told, nothing still queued or in flight for them is sent, and every
+location link they hold stops working. An open alert is
 not stood down: with nobody left, the ladder reaches the simulated FINAL step (no call is placed).
 
 ```json
@@ -542,12 +548,14 @@ During an alert this contact was told about:
 | `action` | Who | Effect | `result` |
 |---|---|---|---|
 | `safe` | the contact who acknowledged | Resolves the alert; everyone is told who resolved it; the location link expires 15 s (demo) or 30 min (real) later | `resolved` |
-| `cant_reach` | the contact who acknowledged | Next level, or FINAL after the last contact | `escalated` |
+| `cant_reach` | the contact who acknowledged | Next level, or FINAL after the last contact. Back at FINAL, the final alert goes to everyone again only while the renotify budget lasts (10 per alert at FINAL), and a contact who takes it on again is not announced again, so one contact cannot flood the others | `escalated` |
 | `pass` | the contact at the current level | "Can't help – pass it on": next level now | `passed` |
 
 ### `GET /l/{share_token}`
 
-Last-known location released with an alert (the token is in `location.link`). Coordinates are stored
+Last-known location released with an alert (the token is in `location.link`). Each contact gets a link of
+their own (the same one in their alert messages and on their page), so removing a contact ends theirs
+without touching anyone else's. Coordinates are stored
 encrypted (AES-GCM) with a key derived from `APP_SECRET`. If `APP_SECRET` is unset, a random secret is kept
 in the database itself, so anyone holding the database can read the coordinates and sign links: set
 `APP_SECRET` whenever the database is not on this machine (the server logs a warning otherwise).

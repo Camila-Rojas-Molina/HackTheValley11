@@ -28,7 +28,7 @@ class ArmIn(BaseModel):
     interval_s: Optional[int] = Field(default=None, ge=10, le=24 * 3600)
     duration_s: Optional[int] = Field(default=None, ge=30, le=24 * 3600)
     window_multiplier: float = Field(default=1.0, ge=1.0, le=10.0)
-    device_id: Optional[str] = None
+    device_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
 class CheckinIn(BaseModel):
@@ -63,8 +63,15 @@ async def arm_session(conn, ctx, user: dict, body: ArmIn, actor: str = "wearer")
     duration = body.duration_s
     if duration is None and body.preset:
         duration = PRESETS[body.preset]["duration_s"]
+    # One arm at a time per wearer: two at once (a double tap) give one session and a 409, not a 500.
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"arm:{user['id']}",))
     device_id = body.device_id
-    if device_id is None:
+    if device_id is not None:
+        own = await (await conn.execute("SELECT 1 FROM devices WHERE id = %s AND user_id = %s",
+                                        (device_id, user["id"]))).fetchone()
+        if own is None:  # another wearer's device or none at all: the same answer for both
+            raise HTTPException(404, "no such device")
+    else:
         row = await (await conn.execute(
             "SELECT id FROM devices WHERE user_id = %s ORDER BY created_at LIMIT 1", (user["id"],))).fetchone()
         device_id = row["id"] if row else None

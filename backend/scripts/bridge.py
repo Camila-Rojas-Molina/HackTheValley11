@@ -85,8 +85,15 @@ def _num(value: str) -> Optional[float]:
         return None
 
 
+def _printable(text: str) -> bool:
+    return bool(text) and all(32 <= ord(ch) < 127 for ch in text)
+
+
 def parse_line(line: str, now: float):
-    """('H', Heartbeat) | ('E', PendingEvent) | ('R', None) | (None, reason)."""
+    """('H', Heartbeat) | ('E', PendingEvent) | ('R', None) | (None, reason).
+
+    Ids must be printable ASCII: serial noise (a NUL byte, say) in a boot id or event id would make
+    every send of that event fail before it leaves the bridge, and hold up the events behind it."""
     line = line.strip()
     if not line:
         return None, "empty"
@@ -95,6 +102,8 @@ def parse_line(line: str, now: float):
         parts = line.split(",")
         if len(parts) != 7:
             return None, "H needs 7 fields"
+        if not _printable(parts[1]):
+            return None, "bad boot_id"
         try:
             seq = int(parts[2])
         except ValueError:
@@ -112,6 +121,8 @@ def parse_line(line: str, now: float):
         boot_id, sep, seq_s = event_id.rpartition(":")
         if not sep or not boot_id:
             return None, "event_id must be boot_id:seq"
+        if not _printable(event_id):
+            return None, "event_id must be printable"
         try:
             seq = int(seq_s)
         except ValueError:

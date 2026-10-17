@@ -20,7 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from psycopg import OperationalError
+from psycopg import DataError, OperationalError
 from psycopg_pool import PoolTimeout
 
 from . import engine
@@ -149,6 +149,13 @@ def create_app(settings: Optional[Settings] = None, *, start_workers: Optional[b
     @app.exception_handler(OperationalError)
     async def _db_down(request: Request, exc: OperationalError):
         return JSONResponse({"ok": False, "error": "database unavailable"}, status_code=503)
+
+    @app.exception_handler(DataError)
+    async def _unstorable(request: Request, exc: DataError):
+        # Input PostgreSQL cannot store (a NUL character in text, a number out of range): a client
+        # error, not a 500 that a device would retry forever. The transaction is rolled back.
+        return JSONResponse({"detail": "a value in the request cannot be stored (for example a NUL character "
+                                       "or a number out of range)"}, status_code=422)
 
     @app.exception_handler(RequestValidationError)
     async def _invalid(request: Request, exc: RequestValidationError):

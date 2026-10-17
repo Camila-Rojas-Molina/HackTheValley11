@@ -11,7 +11,7 @@ import json
 import math
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from .. import engine, rules, states
@@ -39,6 +39,16 @@ def _finite(value) -> bool:
     return True
 
 
+def _has_nul(value) -> bool:
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_has_nul(k) or _has_nul(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_has_nul(v) for v in value)
+    return False
+
+
 class EventIn(BaseModel):
     event_id: str = Field(min_length=1, max_length=80)
     type: Literal["squeeze", "head_position_change", "offbody", "prompt_shown", "fall_like"]
@@ -51,15 +61,30 @@ class EventIn(BaseModel):
         # 1e999 parses as infinity, which JSON (and jsonb) cannot hold: reject it here (422).
         if not _finite(v):
             raise ValueError("payload numbers must be finite")
+        if _has_nul(v):  # jsonb cannot hold \u0000 either
+            raise ValueError("payload text cannot contain NUL characters")
         return v
+
+    @field_validator("event_id")
+    @classmethod
+    def _event_id_is_printable(cls, v: str) -> str:
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in v):
+            raise ValueError("event_id cannot contain control characters")
+        return v
+
+
+SEQ_MAX = 2 ** 63 - 1  # stored as bigint
 
 
 def _int_header(request: Request, name: str) -> Optional[int]:
     v = request.headers.get(name)
     try:
-        return int(v) if v is not None else None
+        n = int(v) if v is not None else None
     except ValueError:
         return None
+    if n is not None and not 0 <= n <= SEQ_MAX:
+        raise HTTPException(422, f"{name} must be 0 to {SEQ_MAX}")
+    return n
 
 
 @router.post("/v1/device/heartbeat")
@@ -119,6 +144,7 @@ async def heartbeat(request: Request, body: Optional[HeartbeatIn] = None):
 @router.post("/v1/device/events")
 async def device_event(request: Request, body: EventIn):
     db, ctx = get_db(request), get_ctx(request)
+    _int_header(request, "x-seq")  # not used here, but a malformed one is the device's error
     async with db.connection() as conn:
         async with conn.transaction():
             dev = await require_device(request, conn)

@@ -115,6 +115,15 @@ async def _recipients(conn, alert: Optional[dict]) -> list[int]:
     return [r["contact_id"] for r in await cur.fetchall()]
 
 
+async def _ackers(conn, alert: Optional[dict]) -> list[int]:
+    if alert is None:
+        return []
+    cur = await conn.execute(
+        "SELECT DISTINCT contact_id FROM acks WHERE alert_id = %s AND result = 'acked' ORDER BY contact_id",
+        (alert["id"],))
+    return [r["contact_id"] for r in await cur.fetchall()]
+
+
 async def _load(conn, session_id):
     sess = await (await conn.execute(
         """SELECT s.*, u.display_name AS wearer_name
@@ -129,6 +138,9 @@ async def _load(conn, session_id):
     alert = next((r for r in rows if not r["cover"]), None)
     cover = next((r for r in rows if r["cover"]), None)
     contacts = await approved_contacts(conn, sess["user_id"])
+    for a in (alert, cover):
+        if a is not None:
+            a["ackers"] = await _ackers(conn, a)
     return sess, alert, contacts, await _recipients(conn, alert), cover, await _recipients(conn, cover)
 
 
@@ -138,7 +150,8 @@ def _alert_view(alert: Optional[dict], recipients: list[int]) -> Optional[states
     return states.AlertView(
         id=alert["id"], kind=alert["kind"], level=alert["level"], is_final=alert["is_final"],
         masked=alert["masked"], status=alert["status"], acked_by=alert["acked_by"],
-        renotify_count=alert["renotify_count"], recipients=tuple(recipients))
+        renotify_count=alert["renotify_count"], recipients=tuple(recipients),
+        ackers=tuple(alert.get("ackers") or ()))
 
 
 def build_snapshot(sess: dict, alert: Optional[dict], contacts: list[dict], recipients: list[int],
@@ -243,13 +256,28 @@ async def _release_location(conn, ctx: Ctx, user_id, alert_id: int, from_alert: 
            VALUES (%s, %s, %s, %s)""", (sha256_hex(token), nonce, snap["id"], alert_id))
 
 
-async def share_for_alert(conn, ctx: Ctx, alert_id: Optional[int], now: datetime) -> Optional[dict]:
+async def share_for_alert(conn, ctx: Ctx, alert_id: Optional[int], now: datetime,
+                          contact_id: Optional[int] = None) -> Optional[dict]:
+    """The location this alert released, as a link of the contact's own (created on first use, and
+    expired with the alert or when the contact is removed)."""
     if alert_id is None:
         return None
-    row = await (await conn.execute(
-        """SELECT ls.token_nonce, ls.expires_at, s.captured_at, s.simulated
+    q = """SELECT ls.token_nonce, ls.expires_at, ls.snapshot_id, s.captured_at, s.simulated
              FROM location_shares ls JOIN location_snapshots s ON s.id = ls.snapshot_id
-            WHERE ls.alert_id = %s ORDER BY ls.id DESC LIMIT 1""", (alert_id,))).fetchone()
+            WHERE ls.alert_id = %s AND ls.contact_id IS NOT DISTINCT FROM %s ORDER BY ls.id DESC LIMIT 1"""
+    row = await (await conn.execute(q, (alert_id, contact_id))).fetchone()
+    if row is None and contact_id is not None:
+        release = await (await conn.execute(q, (alert_id, None))).fetchone()
+        if release is None:
+            return None
+        nonce = new_token()
+        await conn.execute(
+            """INSERT INTO location_shares (token_hash, token_nonce, snapshot_id, alert_id, contact_id, expires_at)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               ON CONFLICT (alert_id, contact_id) WHERE contact_id IS NOT NULL DO NOTHING""",
+            (sha256_hex(location_token(ctx, alert_id, nonce)), nonce, release["snapshot_id"], alert_id, contact_id,
+             release["expires_at"]))
+        row = await (await conn.execute(q, (alert_id, contact_id))).fetchone()
     if row is None:
         return None
     token = location_token(ctx, alert_id, row["token_nonce"])
@@ -409,7 +437,7 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
     by_id = {c["id"]: c for c in contacts}
     base = {"name": sess["wearer_name"], "time": hm(now, tz),
             "t1": hm(updated["prompted_at"], tz), "t2": hm(updated["reminded_at"], tz)}
-    loc_cache: dict = {}
+    loc_cache: dict = {}  # each contact gets a location link of their own
     for i, n in enumerate(d.notify):
         about = cover_id if n.twin else alert_id  # a twin message is about the twin's alert
         if n.to == "contact" and about is not None and n.contact_id in by_id:
@@ -423,9 +451,9 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
         if "contact_id" in n.params:
             p["contact"] = await _contact_name(conn, by_id, n.params["contact_id"])
         if n.template in LOCATION_TEMPLATES:
-            if about not in loc_cache:
-                loc_cache[about] = await share_for_alert(conn, ctx, about, now)
-            p["location"] = loc_cache[about]
+            if (about, n.contact_id) not in loc_cache:
+                loc_cache[(about, n.contact_id)] = await share_for_alert(conn, ctx, about, now, n.contact_id)
+            p["location"] = loc_cache[(about, n.contact_id)]
         if n.template == "ended":
             # The head of what she can see, so it recomputes from her export (masked duress too).
             p["head"] = audit.public_head(await audit.visible_rows(conn, session_id))
@@ -467,9 +495,9 @@ async def _apply_alert_ops(conn, session_id, alert_id: Optional[int], ops: list,
             alert_id = row["id"]
         elif op.op == "level":
             await conn.execute(
-                """UPDATE alerts SET level = %s, is_final = %s, status = 'OPEN', acked_by = NULL,
-                          acked_at = NULL, renotify_count = 0 WHERE id = %s""",
-                (op.level, op.is_final, alert_id))
+                """UPDATE alerts SET level = %s, is_final = %s, status = 'OPEN', acked_by = NULL, acked_at = NULL,
+                          renotify_count = CASE WHEN %s THEN renotify_count ELSE 0 END WHERE id = %s""",
+                (op.level, op.is_final, op.keep_count, alert_id))
         elif op.op == "ack":
             await conn.execute(
                 "UPDATE alerts SET status = 'ACKED', acked_by = %s, acked_at = now() WHERE id = %s",
@@ -566,20 +594,22 @@ def contact_sees(alert: dict, on_duress_ladder: bool) -> bool:
 
 
 async def contact_alert(conn, contact: dict, alert_id: int) -> Optional[dict]:
-    """The alert a contact's button acts on, from the alert id the button carries (Telegram). A duress
-    contact pressing an old button of the alert she could see (now the twin's) acts on the
-    escalation that continues it; a contact kept out of duress alerts acts on the twin's."""
-    alert = await (await conn.execute(
-        "SELECT id, session_id, kind, cover FROM alerts WHERE id = %s AND status IN ('OPEN', 'ACKED')",
-        (alert_id,))).fetchone()
+    """The alert a contact's button acts on, from the alert id the button carries (Telegram): only an
+    open alert of the contact's own wearer that they were told about. A duress contact pressing an
+    old button of the alert she could see (now the twin's) acts on the escalation that continues it;
+    a contact kept out of duress alerts acts on the twin's."""
+    q = """SELECT a.id, a.session_id, a.kind, a.cover FROM alerts a
+             JOIN sessions s ON s.id = a.session_id AND s.user_id = %(user)s
+             JOIN alert_recipients r ON r.alert_id = a.id AND r.contact_id = %(contact)s
+            WHERE a.status IN ('OPEN', 'ACKED') AND """
+    args = {"user": contact["user_id"], "contact": contact["id"]}
+    alert = await (await conn.execute(q + "a.id = %(alert)s", {**args, "alert": alert_id})).fetchone()
     if alert is None:
         return None
     on_ladder = contact["id"] in await duress_ladder_ids(conn, contact["user_id"])
     if alert["cover"] and on_ladder:
-        alert = await (await conn.execute(
-            """SELECT id, session_id, kind, cover FROM alerts
-                WHERE session_id = %s AND status IN ('OPEN', 'ACKED') AND NOT cover""",
-            (alert["session_id"],))).fetchone()
+        alert = await (await conn.execute(q + "a.session_id = %(sid)s AND NOT a.cover",
+                                          {**args, "sid": alert["session_id"]})).fetchone()
     return alert if alert is not None and contact_sees(alert, on_ladder) else None
 
 

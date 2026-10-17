@@ -176,3 +176,17 @@ def test_serial_link_reads_lines_and_writes_c_lines():
         stop.set()
         t.join(timeout=2)
         link.close()
+
+
+@pytest.mark.parametrize("line", ['E,b\x007:43,squeeze,{"pattern":"plain","k":2}',
+                                  'E,b7:4\x013,squeeze,{}', "H,b\x007,42,12.5,8.0,410,0"])
+def test_lines_with_control_characters_in_their_ids_are_dropped(line):
+    kind, reason = br.parse_line(line, 5.0)
+    assert kind is None and ("boot_id" in reason or "event_id" in reason)
+
+
+def test_a_dropped_noisy_line_never_holds_up_the_next_event(setup):
+    b, srv, clock, out = setup
+    b.handle_line('E,b\x007:1,squeeze,{"pattern":"plain","k":2}')
+    b.handle_line('E,b7:2,squeeze,{"pattern":"plain","k":2}')
+    assert [c[2]["event_id"] for c in srv.paths("/events")] == ["b7:2"] and b.events == []

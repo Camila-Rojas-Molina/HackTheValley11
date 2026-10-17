@@ -430,3 +430,21 @@ def test_masked_duress_link_notices_follow_the_twin(public):
     d2 = decide(step(s, d), Event(states.LINK_RESTORED))
     assert d2.wearer_templates == ([] if public == ENDED else ["wearer_restored"])
     assert [n.template for n in d2.notify if n.to == "contact"] == ["restored"]
+
+
+def test_back_to_final_spends_the_renotify_budget_and_a_repeat_ack_is_not_announced():
+    held = alert(level=3, is_final=True, status="ACKED", acked_by=C1, recipients=(C1, C2), ackers=(C1,))
+    s = snap(ACKED, alert=held)
+    d = decide(s, Event(states.CONTACT_CANT_REACH, contact_id=C1), first)
+    assert d.to_state == FINAL
+    assert [(op.op, op.keep_count) for op in d.alert_ops] == [("level", True), ("renotify", False)]
+    assert sorted(n.contact_id for n in d.notify if n.template == "alert_final") == [C1, C2]
+    spent = replace(held, renotify_count=T.renotify_cap)
+    d = decide(snap(ACKED, alert=spent), Event(states.CONTACT_CANT_REACH, contact_id=C1), first)
+    assert d.to_state == FINAL and not [n for n in d.notify if n.template == "alert_final" and n.contact_id != C1]
+    again = decide(snap(FINAL, alert=replace(held, status="OPEN", acked_by=None)),
+                   Event(states.CONTACT_ACK, contact_id=C1), first)
+    assert again.reply == "acked" and not [n for n in again.notify if n.template == "handling"]
+    first_ack = decide(snap(FINAL, alert=replace(held, status="OPEN", acked_by=None, ackers=())),
+                       Event(states.CONTACT_ACK, contact_id=C1), first)
+    assert [n.contact_id for n in first_ack.notify if n.template == "handling"] == [C2]

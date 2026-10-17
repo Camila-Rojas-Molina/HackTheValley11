@@ -166,6 +166,18 @@ async def set_duress_recipient(request: Request, contact_id: int, body: DuressIn
     return {"ok": True, "contact_id": contact_id, "duress_eligible": body.eligible}
 
 
+async def _silence(conn, contact_ids: list[int]) -> None:
+    """A removed contact is not told, gets nothing still queued or in flight (a send that fails after
+    this is not retried: outbox.Sender also checks), and their location links stop working."""
+    await conn.execute(
+        """UPDATE outbox SET status = 'failed', last_error = 'contact removed', locked_until = NULL
+            WHERE contact_id = ANY(%s) AND recipient = 'contact' AND status IN ('pending', 'sending')""",
+        (contact_ids,))
+    await conn.execute(
+        """UPDATE location_shares SET expires_at = now()
+            WHERE contact_id = ANY(%s) AND (expires_at IS NULL OR expires_at > now())""", (contact_ids,))
+
+
 @router.delete("/v1/contacts")
 async def revoke_all(request: Request):
     db = get_db(request)
@@ -177,10 +189,7 @@ async def revoke_all(request: Request):
                     WHERE user_id = %s AND revoked_at IS NULL RETURNING id""", (user["id"],))).fetchall()
             ids = [r["id"] for r in rows]
             if ids:
-                # Silent: nothing is sent to anyone, and nothing still queued for them goes out.
-                await conn.execute(
-                    """UPDATE outbox SET status = 'failed', last_error = 'contact removed'
-                        WHERE contact_id = ANY(%s) AND status = 'pending'""", (ids,))
+                await _silence(conn, ids)
             await audit.append(conn, chain_key=audit.user_chain(user["id"]), actor="wearer",
                                kind="contacts_removed_all", user_id=user["id"], detail={"removed": len(ids)})
     return {"ok": True, "removed": len(ids)}
@@ -197,10 +206,7 @@ async def revoke(request: Request, contact_id: int):
                     WHERE id = %s AND user_id = %s AND revoked_at IS NULL""", (contact_id, user["id"]))
             if cur.rowcount == 0:
                 raise HTTPException(404, "no such contact")
-            # Silent: nothing is sent to the contact.
-            await conn.execute(
-                """UPDATE outbox SET status = 'failed', last_error = 'contact removed'
-                    WHERE contact_id = %s AND status = 'pending'""", (contact_id,))
+            await _silence(conn, [contact_id])
             await audit.append(conn, chain_key=audit.user_chain(user["id"]), actor="wearer", kind="contact_removed",
                                user_id=user["id"], detail={"contact_id": contact_id})
     return {"ok": True}
@@ -304,7 +310,8 @@ async def contact_status(request: Request, token: str):
             return JSONResponse({"alert": None, "approved": contact["approved_at"] is not None},
                                 headers={"Cache-Control": "no-store"})
         now = await engine.db_now(conn)
-        loc = await engine.share_for_alert(conn, ctx, alert["id"], now)
+        async with conn.transaction():  # their own link, created on first use
+            loc = await engine.share_for_alert(conn, ctx, alert["id"], now, contact["id"])
         handler = None
         if alert["acked_by"]:
             r = await (await conn.execute("SELECT name FROM contacts WHERE id = %s", (alert["acked_by"],))).fetchone()

@@ -8,7 +8,8 @@
   is stored in bot_state in the same transaction that processes the update.
 * /start <token>: binds a contact invite (pending until the wearer approves)
   or the wearer's own chat (for "Reminder" nudges the Apple Watch mirrors).
-* Inline buttons: ack / pass / safe / cant -> CONTACT_* events.
+* Inline buttons: ack / pass / safe / cant -> CONTACT_* events, only from the contact's own chat and
+  only on an open alert of that contact's wearer that the contact was told about.
 With no TELEGRAM_BOT_TOKEN the poller does nothing and the outbox logs instead.
 """
 from __future__ import annotations
