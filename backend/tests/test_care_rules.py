@@ -258,3 +258,17 @@ def test_missing_device_data_is_never_reported_as_routine_care():
     days[-1] = replace(days[-1], stand_ups=0)
     card = care.score_resident("X", "X", days, END)
     assert card["level"] == care.LEVEL_CHECK and not card["data_quality"]["all_rules_scored"]
+
+
+def test_settle_not_enough_data_text_states_the_rule_it_applies():
+    base = flat_days()
+    twelve_then_none = flat_days()
+    twelve_then_none[-2] = replace(twelve_then_none[-2], stand_ups=12)
+    twelve_then_none[-1] = replace(twelve_then_none[-1], stand_ups=0)
+    r = rule(care.score_resident("X", "X", twelve_then_none, END), care.SETTLE)
+    assert not r["scored"]
+    assert "8+ stand-ups per 48 h" in care.THRESHOLDS[care.SETTLE]
+    assert "8+ stand-ups per 48 h" in r["explanation"] and "on both days" in r["explanation"]
+    assert "8+ stand-ups on both days" not in r["explanation"]  # that is not the rule
+    four_and_four = [replace(d, stand_ups=4) if d.day >= END - timedelta(days=1) else d for d in base]
+    assert rule(care.score_resident("X", "X", four_and_four, END), care.SETTLE)["scored"] is True

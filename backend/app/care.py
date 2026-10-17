@@ -177,7 +177,7 @@ def rule_settle(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Optio
     n_r, n_b = sum(d.stand_ups for d in r), sum(d.stand_ups for d in b)
     out["stand_ups"] = {"recent": n_r, "baseline": n_b}
     if len(r) < WINDOW_DAYS or len(b) < WINDOW_DAYS or n_r < MIN_STAND_UPS or n_b < MIN_STAND_UPS:
-        return _not_enough(out, f"needs {MIN_STAND_UPS}+ stand-ups on both days of each 48 h window")
+        return _not_enough(out, f"needs stand-ups on both days and {MIN_STAND_UPS}+ stand-ups per 48 h window")
     obs, base = _mean([d.settle_s for d in r]), _mean([d.settle_s for d in b])
     if base <= 0:
         return _not_enough(out, "baseline is zero")
