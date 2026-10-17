@@ -79,7 +79,7 @@ async def test_vultr_words_only_the_briefing_of_flagged_cards(client, db, monkey
     use_fake(monkeypatch, fake)
 
     cards = (await client.get("/v1/care/alerts")).json()["alerts"]
-    assert len(cards) == 7 and len(fake.bodies) == 7
+    assert len(cards) == 5 and len(fake.bodies) == 5
     for c in cards:
         assert c["briefing_source"] == "vultr"
         assert c["briefing"] == f"{c['display_name']} (SYNTHETIC): {TEXT}"
@@ -93,8 +93,8 @@ async def test_vultr_words_only_the_briefing_of_flagged_cards(client, db, monkey
 
     # "low" cards are not sent, and flagged ones come from the cache on a refresh.
     everyone = (await client.get("/v1/care/alerts?include_low=true")).json()["alerts"]
-    assert len(fake.bodies) == 7
-    assert sorted(c["briefing_source"] for c in everyone) == ["template"] * 13 + ["vultr"] * 7
+    assert len(fake.bodies) == 5
+    assert sorted(c["briefing_source"] for c in everyone) == ["template"] * 15 + ["vultr"] * 5
     for c in everyone:
         assert (c["briefing_source"] == "vultr") == (c["level"] != care.LEVEL_LOW)
     # The stored cards still hold the rule template.

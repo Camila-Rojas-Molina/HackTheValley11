@@ -74,9 +74,9 @@ async def test_seed_scores_the_cohort_and_touches_no_kaze_table(client, db):
     body = await seed(client)
     assert body["synthetic"] is True and body["residents"] == 20 and body["days"] == 14 and body["rows"] == 280
     assert body["as_of"] == END.isoformat()
-    assert body["scripted_change"] == {"residents": 7, "flagged": 7}
-    assert body["no_change_scripts"] == {"residents": 13, "flagged": 0}
-    assert sum(body["levels"].values()) == 20 and body["levels"]["low"] == 13
+    assert body["scripted_change"] == {"residents": 5, "flagged": 5}
+    assert body["no_change_scripts"] == {"residents": 15, "flagged": 0}
+    assert sum(body["levels"].values()) == 20 and body["levels"]["low"] == 15
     assert await care_counts(db) == {"residents": 20, "metrics": 280, "alerts": 20}
     await client.get("/v1/care/residents")
     await client.get("/v1/care/alerts?include_low=true")
@@ -105,7 +105,7 @@ async def test_alerts_are_the_flagged_cards_check_today_first_then_by_score(clie
     assert body["synthetic"] is True and body["as_of"] == END.isoformat()
     assert body["thresholds_status"] == "untested assumption"
     cards = body["alerts"]
-    assert len(cards) == 7 and all(c["level"] in ("watch", "check today") for c in cards)
+    assert len(cards) == 5 and all(c["level"] in ("watch", "check today") for c in cards)
     keys = [(c["level"] != "check today", -c["score"]) for c in cards]
     assert keys == sorted(keys)
     for c in cards:
@@ -177,9 +177,9 @@ async def test_a_resident_whose_data_stopped_stays_on_the_alert_list(client, db)
     from app import care
     await seed(client)
     async with db.connection() as conn:
-        await conn.execute("DELETE FROM care_daily_metrics WHERE resident_id = 'R-02' AND day >= %s",
+        await conn.execute("DELETE FROM care_daily_metrics WHERE resident_id = 'R-05' AND day >= %s",
                            (END - timedelta(days=1),))
         await care.evaluate(conn, END)
     alerts = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts")).json()["alerts"]}
-    assert alerts["R-02"]["level"] == care.LEVEL_NO_DATA
-    assert alerts["R-02"]["briefing_source"] == "template"
+    assert alerts["R-05"]["level"] == care.LEVEL_NO_DATA
+    assert alerts["R-05"]["briefing_source"] == "template"

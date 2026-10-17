@@ -10,18 +10,20 @@ no-change scripts: stable residents, a one-off bad night, and residents whose us
 are simply high. The script is ground truth for checking the rules; the rules never read it.
 
 Rules. Each compares a resident with their own baseline, never with other residents:
-  postural_sway_drift   quiet-standing sway, last 48 h vs their own 48 h baseline
   rise_to_settle_time   after standing up, the time until balance (accelerometer) and
                         heart rate have both settled; same two windows
   night_restlessness    minutes moving at night; both of the last 2 nights must be above
                         their usual, so one bad night scores nothing
+Postural sway is shown on the card greyed out, "experimental, not scored" (research 1.1):
+traditional sway measures were not associated with the outcome studied in 738 older adults
+(Zhou 2017, PMC5462759), and sway measured at the wrist or in the hair is not validated.
 The baseline is the first 48 h of the 14-day record. 48 h is short: day-to-day variation
 in older adults is large, so a longer baseline would be steadier once more data exists.
 The generator's day-to-day variation is a chosen demo value and the scripted changes are
 large next to it; real data will be noisier, and how early a change shows up here comes
 from the script, not from any study.
 
-Card. score 0-100 is the sum of the rule contributions (30 + 40 + 30 at most). Level:
+Card. score 0-100 is the sum of the rule contributions (55 + 45 at most). Level:
 "check today" from 45 points or when any rule reaches its top band, "watch" from 15,
 otherwise "low", or "not enough data" when a rule could not score (the data stopped). Every threshold here is an untested assumption (a demo parameter), not a
 clinical cut-off, and the API says so on every card.
@@ -40,7 +42,8 @@ ASSUMPTION = "untested assumption"
 METHOD = "deterministic rules against the resident's own baseline; no model"
 
 SWAY, SETTLE, NIGHT = "postural_sway_drift", "rise_to_settle_time", "night_restlessness"
-RULES = (SWAY, SETTLE, NIGHT)
+RULES = (SETTLE, NIGHT)          # scored
+EXPERIMENTAL = (SWAY,)           # shown greyed out, never scored (research 1.1)
 LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK = "low", "watch", "check today"
 LEVEL_NO_DATA = "not enough data"  # below "watch" with a rule unable to score: the data stopped
 LEVELS = (LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK, LEVEL_NO_DATA)
@@ -56,37 +59,44 @@ WINDOW_DAYS = 2                 # "last 48 h" and "own 48 h baseline"
 MIN_WEAR_HOURS = 6.0            # a day counts for sway only if worn this long
 MIN_STAND_UPS = 8               # stand-ups needed in each 48 h window
 MIN_NIGHT_WEAR_MIN = 240.0      # a night counts only if worn this long (of 420 min)
-# (change vs baseline, points), highest band first
-SWAY_BANDS = ((0.50, 30), (0.35, 25), (0.20, 15))
-SETTLE_BANDS = ((0.60, 40), (0.40, 30), (0.25, 20))
+# (change vs baseline, points), highest band first. Sway's 30 points went to the scored rules
+# in proportion (40:30 -> 55:45) when sway left the score (research 1.1).
+SETTLE_BANDS = ((0.60, 55), (0.40, 40), (0.25, 25))
 SETTLE_MIN_CHANGE_S = 5.0       # and at least this many seconds slower
-NIGHT_BANDS = ((1.00, 30), (0.50, 15))  # each of the last 2 nights at least this far above
+NIGHT_BANDS = ((1.00, 45), (0.50, 25))  # each of the last 2 nights at least this far above
 NIGHT_MIN_CHANGE_MIN = 15.0     # and at least this many minutes above, each night
 WATCH_FROM = 15
 CHECK_TODAY_FROM = 45
 
 THRESHOLDS = {
-    SWAY: "+20% -> 15, +35% -> 25, +50% -> 30 points; days worn at least 6 h",
-    SETTLE: "+25% -> 20, +40% -> 30, +60% -> 40 points, and at least 5 s slower; 8+ stand-ups per 48 h",
-    NIGHT: "both of the last 2 nights +50% -> 15, +100% -> 30 points, and at least 15 min above; nights worn 4 h+",
+    SETTLE: "+25% -> 25, +40% -> 40, +60% -> 55 points, and at least 5 s slower; 8+ stand-ups per 48 h",
+    NIGHT: "both of the last 2 nights +50% -> 25, +100% -> 45 points, and at least 15 min above; nights worn 4 h+",
     "levels": ("watch from 15 points; check today from 45 points or any rule in its top band; "
                "not enough data below 15 points when a rule could not score"),
 }
-MAX_POINTS = {SWAY: SWAY_BANDS[0][1], SETTLE: SETTLE_BANDS[0][1], NIGHT: NIGHT_BANDS[0][1]}
+MAX_POINTS = {SETTLE: SETTLE_BANDS[0][1], NIGHT: NIGHT_BANDS[0][1]}
 assert sum(MAX_POINTS.values()) == 100
 
 LABELS = {
-    SWAY: "Standing sway",
+    SWAY: "Standing sway (experimental, not scored)",
     SETTLE: "Settling after standing up",
     NIGHT: "Movement at night",
 }
 
 # Suggested check for the care aide, per rule that scored.
 AIDE_CHECKS = {
-    SWAY: "watch their standing balance during transfers and walks today, with their walking aid within reach",
     SETTLE: ("stay with them the first time they stand up after resting, give them time to steady, "
              "and note it if they say they feel dizzy"),
     NIGHT: "note how they slept and any night-time waking on rounds tonight",
+}
+
+
+EXPERIMENTAL_STATUS = "experimental, not scored"
+# Why each experimental signal is on the card but outside the score. Source: research 1.1,
+# Zhou 2017 (MOBILIZE Boston, PMC5462759); no study validates sway from a wrist or hair tie.
+EXPERIMENTAL_NOTES = {
+    SWAY: ("Shown for the care team only. Traditional sway measures were not linked to the outcome "
+           "studied in 738 older adults (Zhou 2017), and sway from a wrist or hair tie is not validated."),
 }
 
 
@@ -145,26 +155,19 @@ def _not_enough(out: dict, need: str) -> dict:
     return out
 
 
-def rule_sway(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Optional[DayMetrics]]) -> dict:
+def experimental_sway(recent: Sequence[Optional[DayMetrics]],
+                      baseline: Sequence[Optional[DayMetrics]]) -> dict:
+    """Standing sway, recent vs baseline, for display only: it never adds points (research 1.1)."""
     def worn(days):
         return [d.sway_rms for d in days if d is not None and d.sway_rms is not None
                 and d.wear_hours >= MIN_WEAR_HOURS]
 
     r, b = worn(recent), worn(baseline)
-    out = _rule(SWAY, "m/s²", 3, r, b)
-    if len(r) < WINDOW_DAYS or len(b) < WINDOW_DAYS or _mean(b) <= 0:
-        return _not_enough(out, f"needs {WINDOW_DAYS} days worn {MIN_WEAR_HOURS:g} h+ in each 48 h window")
-    obs, base = _mean(r), _mean(b)
-    change = obs / base - 1.0
-    points, cut = _band(change, SWAY_BANDS)
-    out.update(observed=round(obs, 3), baseline=round(base, 3), change_pct=_pct(change), scored=True,
-               contribution=points, top_band=points == SWAY_BANDS[0][1])
-    head = (f"Standing sway over the last 48 h: {obs:.3f} m/s² vs {base:.3f} m/s² in their own "
-            f"48 h baseline ({_pct(change):+d}%)")
-    if points:
-        out["explanation"] = f"{head}; at or above the +{_pct(cut)}% band, {points} points."
-    else:
-        out["explanation"] = f"{head}; below the +{_pct(SWAY_BANDS[-1][0])}% band, no points."
+    out = {"signal": SWAY, "label": LABELS[SWAY], "status": EXPERIMENTAL_STATUS, "unit": "m/s²",
+           "observed": round(_mean(r), 3) if r else None, "baseline": round(_mean(b), 3) if b else None,
+           "change_pct": None, "contribution": 0, "note": EXPERIMENTAL_NOTES[SWAY]}
+    if r and b and _mean(b) > 0:
+        out["change_pct"] = _pct(_mean(r) / _mean(b) - 1.0)
     return out
 
 
@@ -294,7 +297,7 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
     recent_days, baseline_days = windows(as_of)
     recent = [by_day.get(d) for d in recent_days]
     baseline = [by_day.get(d) for d in baseline_days]
-    rules = [rule_sway(recent, baseline), rule_settle(recent, baseline), rule_night(recent, baseline)]
+    rules = [rule_settle(recent, baseline), rule_night(recent, baseline)]
     score = sum(r["contribution"] for r in rules)
     level = level_for(score, any(r["top_band"] for r in rules))
     missing = [r["rule"] for r in rules if not r["scored"]]
@@ -309,6 +312,7 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "score": score,
         "level": level,
         "rules": rules,
+        "experimental": [experimental_sway(recent, baseline)],
         "suggested_check": suggested_check(level, [r["rule"] for r in rules if r["contribution"] > 0], missing),
         "briefing": "",
         "as_of": as_of.isoformat(),
@@ -350,9 +354,10 @@ class Script:
 
 SCRIPTS: dict[str, Script] = {s.name: s for s in (
     Script("stable", "No scripted change; day-to-day variation only.", False),
-    Script("sway_drift", "Standing sway rises 5% of usual a day from day 5.", True, (SWAY,),
+    # Sway is experimental (research 1.1): these drifts are shown on the card and score nothing.
+    Script("sway_drift", "Standing sway rises 5% of usual a day from day 5 (shown, not scored).", False,
            onset=4, sway_per_day=0.05),
-    Script("sway_drift_steep", "Standing sway rises 7% of usual a day from day 4.", True, (SWAY,),
+    Script("sway_drift_steep", "Standing sway rises 7% of usual a day from day 4 (shown, not scored).", False,
            onset=3, sway_per_day=0.07),
     Script("slower_settle", "Settling after standing up slows 6% of usual a day from day 6.", True, (SETTLE,),
            onset=5, settle_per_day=0.06),
@@ -361,10 +366,10 @@ SCRIPTS: dict[str, Script] = {s.name: s for s in (
     Script("night_restless", "Night-time movement rises 20% of usual a night from night 6.", True, (NIGHT,),
            night_onset=5, night_per_day=0.20),
     Script("clustered", "Sway and settling time rise gradually from day 5, night-time movement from night 6.",
-           True, (SWAY, SETTLE, NIGHT), onset=4, sway_per_day=0.05, settle_per_day=0.06,
+           True, (SETTLE, NIGHT), onset=4, sway_per_day=0.05, settle_per_day=0.06,
            night_onset=5, night_per_day=0.18),
     Script("clustered_mild", "Sway rises gradually from day 5, night-time movement from night 6.", True,
-           (SWAY, NIGHT), onset=4, sway_per_day=0.045, night_onset=5, night_per_day=0.15),
+           (NIGHT,), onset=4, sway_per_day=0.045, night_onset=5, night_per_day=0.15),
     Script("one_off_bad_night", "One bad night before day 13 (3x usual movement), then back to usual.", False,
            bad_night_day=12),
     Script("one_off_bad_night_last", "One bad night before day 14 (3x usual movement).", False,

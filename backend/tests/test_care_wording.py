@@ -58,7 +58,8 @@ def test_every_card_string_is_clean(seed):
 
 def test_constants_and_script_notes_are_clean():
     strings = [care.NOTICE, care.ASSUMPTION, care.METHOD, *care.LABELS.values(), *care.AIDE_CHECKS.values(),
-               *care.THRESHOLDS.values(), *care.LEVELS, *care.RULES]
+               *care.THRESHOLDS.values(), *care.LEVELS, *care.RULES, *care.EXPERIMENTAL,
+               *care.EXPERIMENTAL_NOTES.values()]
     for script in care.SCRIPTS.values():
         strings += [script.name, script.note]
     for s in strings:

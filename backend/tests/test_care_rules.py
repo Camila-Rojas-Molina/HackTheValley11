@@ -56,7 +56,10 @@ def test_cohort_is_20_residents_by_14_days_all_synthetic():
     assert names.count("stable") >= 9
     for counter in ("one_off_bad_night", "one_off_bad_night_last", "high_usual"):
         assert counter in names
-    assert sum(r.script.expect_flag for r in cohort) == 7
+    assert sum(r.script.expect_flag for r in cohort) == 5
+    # Sway-only scripts are counter-examples now: sway is shown, never scored (research 1.1).
+    assert {r.script.name for r in cohort if r.script.moves == () and 'sway' in r.script.name} == \
+        {'sway_drift', 'sway_drift_steep'}
 
 
 def test_generator_is_deterministic_per_seed():
@@ -118,7 +121,7 @@ def test_high_usual_resident_is_judged_against_their_own_baseline():
 def test_engine_never_sees_the_script():
     params = list(inspect.signature(care.score_resident).parameters)
     assert params == ["resident_id", "display_name", "days", "as_of", "briefing"]
-    for fn in (care.score_resident, care.rule_sway, care.rule_settle, care.rule_night, care.level_for,
+    for fn in (care.score_resident, care.experimental_sway, care.rule_settle, care.rule_night, care.level_for,
                care.suggested_check, care.local_briefing, care.evaluate):
         names = fn.__code__.co_names + fn.__code__.co_varnames
         assert not [n for n in names if "script" in n or "expect" in n], fn.__name__
@@ -172,13 +175,33 @@ def test_briefing_is_written_after_the_decision_and_cannot_change_it():
 
 
 # --- rule arithmetic on hand-made days ----------------------------------------------------------------
-@pytest.mark.parametrize("sway,points", [(0.06, 0), (0.0715, 0), (0.0725, 15), (0.0815, 25), (0.0905, 30)])
-def test_sway_bands(sway, points):
+# --- research 1.1: postural sway is shown greyed out, never scored --------------------------------
+@pytest.mark.parametrize("sway", [0.06, 0.0725, 0.0905, 0.2])
+def test_sway_never_changes_the_score_or_level(sway):
     card = care.score_resident("X", "Synthetic resident X", flat_days(sway_rms=sway), END)
-    assert rule(card, care.SWAY)["contribution"] == points
+    assert care.SWAY not in [r["rule"] for r in card["rules"]]
+    assert card["score"] == 0 and card["level"] == care.LEVEL_LOW
+    exp = {e["signal"]: e for e in card["experimental"]}[care.SWAY]
+    assert exp["status"] == "experimental, not scored" and exp["contribution"] == 0
+    assert exp["observed"] == pytest.approx(sway, abs=1e-3) and exp["baseline"] == pytest.approx(0.06)
 
 
-@pytest.mark.parametrize("settle,points", [(24.0, 0), (25.5, 20), (28.5, 30), (32.5, 40)])
+def test_sway_is_out_of_the_points_and_the_points_still_sum_to_100():
+    assert care.SWAY not in care.RULES and care.SWAY not in care.MAX_POINTS
+    assert care.SWAY in care.EXPERIMENTAL
+    assert sum(care.MAX_POINTS.values()) == 100
+    assert set(care.MAX_POINTS) == set(care.RULES)
+
+
+def test_sway_only_scripts_stay_low_but_the_change_is_visible():
+    for res, card in scored():
+        if res.script.sway_per_day and not res.script.moves:
+            exp = {e["signal"]: e for e in card["experimental"]}[care.SWAY]
+            assert exp["observed"] > exp["baseline"], exp           # the drift is on the card...
+            assert card["level"] == care.LEVEL_LOW and card["score"] == 0    # ...and scores nothing
+
+
+@pytest.mark.parametrize("settle,points", [(24.0, 0), (25.5, 25), (28.5, 40), (32.5, 55)])
 def test_settle_bands(settle, points):
     card = care.score_resident("X", "Synthetic resident X", flat_days(settle_s=settle), END)
     assert rule(card, care.SETTLE)["contribution"] == points
@@ -197,9 +220,9 @@ def test_night_needs_both_nights():
     one[-1] = replace(one[-1], night_restless_min=90.0)
     assert rule(care.score_resident("X", "X", one, END), care.NIGHT)["contribution"] == 0
     both = flat_days(night_restless_min=50.0)                         # +67% and +20 min each night
-    assert rule(care.score_resident("X", "X", both, END), care.NIGHT)["contribution"] == 15
+    assert rule(care.score_resident("X", "X", both, END), care.NIGHT)["contribution"] == 25
     double = flat_days(night_restless_min=61.0)
-    assert rule(care.score_resident("X", "X", double, END), care.NIGHT)["contribution"] == 30
+    assert rule(care.score_resident("X", "X", double, END), care.NIGHT)["contribution"] == 45
 
 
 def test_lower_values_never_score():
@@ -242,7 +265,7 @@ def test_suggested_check_is_for_the_aide_and_points_to_the_nurse():
 def test_missing_device_data_is_never_reported_as_routine_care():
     """A scripted decline whose last two days lost their data must not read 'continue routine care'."""
     cohort = care.generate_cohort(care.DEFAULT_SEED, END)
-    r02 = next(r for r in cohort if r.id == "R-02")
+    r02 = next(r for r in cohort if r.id == "R-05")  # a scripted settling change
     assert care.score_resident(r02.id, r02.display_name, r02.days, END)["level"] != care.LEVEL_LOW
     not_worn = [replace(d, wear_hours=5.0, stand_ups=0) if d.day >= END - timedelta(days=1) else d
                 for d in r02.days]
@@ -254,7 +277,7 @@ def test_missing_device_data_is_never_reported_as_routine_care():
         assert card["suggested_check"].startswith("Device data is missing for:")
         assert not card["data_quality"]["all_rules_scored"]
     # Real scores still win: a rule that scored high with others unscored keeps its level.
-    days = flat_days(sway_rms=0.2)
+    days = flat_days(night_restless_min=200.0)
     days[-1] = replace(days[-1], stand_ups=0)
     card = care.score_resident("X", "X", days, END)
     assert card["level"] == care.LEVEL_CHECK and not card["data_quality"]["all_rules_scored"]
