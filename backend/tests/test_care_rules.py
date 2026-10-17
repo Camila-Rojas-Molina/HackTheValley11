@@ -532,3 +532,75 @@ def test_score_no_longer_sets_the_level():
     assert care.LEVELS == ("low", "worth a look this shift", "review this shift", "not enough data")
     assert care.FLAGGED == ("worth a look this shift", "review this shift")
     assert "2 different rules" in care.THRESHOLDS["levels"] and "3 days" in care.THRESHOLDS["levels"]
+
+
+# --- research 1.7: data quality, medication context and the pattern-change line on every card -------
+def test_every_card_shows_hours_worn_gaps_and_heart_rate_availability():
+    for _, card in scored():
+        dq = card["data_quality"]
+        assert dq["days_expected"] == 16 and dq["gaps"] == [] and dq["days_present"] == 16
+        assert 0 < dq["hours_worn_last_48h"] <= 48
+        assert dq["heart_rate"]["of_days"] == 16 and 0 <= dq["heart_rate"]["available_days"] <= 16
+        assert dq["heart_rate"]["label"].startswith("available on ")
+
+
+def test_gaps_and_missing_heart_rate_are_listed():
+    days = flat_days()
+    _, baseline = care.windows(END)
+    gone = {baseline[3], baseline[4]}
+    days = [replace(d, stand_hr_n=0) for d in days if d.day not in gone]
+    dq = care.score_resident("X", "X", days, END)["data_quality"]
+    assert dq["gaps"] == sorted(x.isoformat() for x in gone) and dq["days_present"] == 14
+    assert dq["heart_rate"] == {"available_days": 0, "of_days": 16, "label": "not available"}
+
+
+MED_9 = {"class": "antihypertensive", "change": "started", "on": (END - timedelta(days=9)).isoformat()}
+
+
+def test_medication_context_raises_a_look_to_review():
+    card = care.score_resident("X", "X", flat_days(night_restless_min=200.0), END, record={"med_changes": [MED_9]})
+    assert card["level"] == care.LEVEL_REVIEW and card["priority_raised_by"] == "medication context"
+    ctx = card["record_context"]
+    assert ctx["synthetic"] is True and ctx["raises_priority"] is True
+    assert ctx["medication_changes_30d"] == [{**MED_9, "days_ago": 9}]
+    assert "started an antihypertensive 9 days ago" in card["briefing"]
+
+
+def test_medication_context_never_alerts_on_its_own():
+    card = care.score_resident("X", "X", flat_days(), END, record={"med_changes": [MED_9]})
+    assert card["level"] == care.LEVEL_LOW and card["priority_raised_by"] is None
+    assert card["record_context"]["raises_priority"] is False      # listed, but it starts nothing
+
+
+@pytest.mark.parametrize("med", [
+    {"class": "antihypertensive", "change": "started", "on": (END - timedelta(days=31)).isoformat()},  # too old
+    {"class": "vitamin D", "change": "started", "on": (END - timedelta(days=3)).isoformat()},         # not listed
+])
+def test_medication_context_outside_30_days_or_the_listed_classes_does_not_raise(med):
+    card = care.score_resident("X", "X", flat_days(night_restless_min=200.0), END, record={"med_changes": [med]})
+    assert card["level"] == care.LEVEL_LOOK and card["priority_raised_by"] is None
+
+
+def test_listed_medication_classes_are_the_research_ones():
+    assert "antihypertensive" in care.MED_CLASSES_RAISE
+    for c in ("anticholinergic", "antipsychotic", "benzodiazepine", "corticosteroid", "H2 blocker", "Z-drug",
+              "opioid", "SSRI", "SNRI", "TCA", "antiepileptic"):
+        assert c in care.MED_CLASSES_RAISE, c
+    assert care.MED_WINDOW_DAYS == 30
+    assert "Beers 2023" in care.SOURCES["medication"] and "Dave 2024" in care.SOURCES["medication"]
+
+
+def test_cohort_has_a_raised_card_and_a_medication_change_that_alerts_nothing():
+    cards = {c["resident_id"]: c for _, c in scored()}
+    raised = [c for c in cards.values() if c["priority_raised_by"] == "medication context"]
+    assert raised and all(c["level"] == care.LEVEL_REVIEW for c in raised)
+    quiet = [c for c in cards.values() if c["record_context"]["medication_changes_30d"] and not c["rules"][1]["contribution"]
+             and not c["rules"][0]["contribution"]]
+    assert quiet and all(c["level"] == care.LEVEL_LOW for c in quiet)
+
+
+def test_every_card_says_pattern_change_only():
+    assert care.PATTERN_NOTE == "Pattern change only - not a medical assessment."
+    for _, card in scored():
+        assert card["pattern_note"] == care.PATTERN_NOTE
+        assert card["briefing"].endswith(care.PATTERN_NOTE)

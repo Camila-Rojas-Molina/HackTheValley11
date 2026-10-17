@@ -127,6 +127,17 @@ AIDE_CHECKS = {
 }
 
 
+# Medication context (research 1.7): a start or change in the last 30 days of an antihypertensive
+# or a medication class the AGS Beers Criteria 2023 lists raises the priority one level
+# ("worth a look" -> "review"); it never starts an alert on its own. Synthetic record field.
+MED_WINDOW_DAYS = 30
+MED_CLASSES_RAISE = ("antihypertensive", "anticholinergic", "antipsychotic", "benzodiazepine", "corticosteroid",
+                     "H2 blocker", "Z-drug", "opioid", "SSRI", "SNRI", "TCA", "antiepileptic")
+MED_NOTE = "Medication context raises the priority one level; it never starts an alert on its own."
+# The line every card carries (research 1.7). The research wording ends in a word the project's
+# wording rules ban (BUILD_PLAN 7.3), so the card says "not a medical assessment" instead.
+PATTERN_NOTE = "Pattern change only - not a medical assessment."
+
 EXPERIMENTAL_STATUS = "experimental, not scored"
 # Why each experimental signal is on the card but outside the score. Source: research 1.1,
 # Zhou 2017 (MOBILIZE Boston, PMC5462759); no study validates sway from a wrist or hair tie.
@@ -173,6 +184,8 @@ def _sd(values: Sequence[float], mean: float) -> float:
 
 
 SOURCES = {
+    "medication": ("Shimbo 2016 (15 days after starting an antihypertensive); Dave 2024 (JAMA Intern Med, "
+                   "nursing-home residents, 30 days after starting an antihypertensive); AGS Beers 2023"),
     STAND_HR: ("CDC STEADI 2017 (BP and pulse at 1 and 3 min standing); Norcliffe-Kaufmann 2018 "
                "(PMC5867255: the blood-pressure criterion needs blood pressure); Falter 2019 (PMC6444219: "
                "watch heart-rate error at rest)"),
@@ -262,8 +275,8 @@ def rule_stand_hr(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Opt
                                "baseline_days": len(b)})
     if off_reason:
         out.update(status="off", recent_values=[], baseline_values=[], baseline_days=0,
-                   explanation=(f"Off for this resident: the synthetic record notes {off_reason}, so heart rate "
-                                "after standing is not compared."))
+                   explanation=(f"Off for this resident: the synthetic record notes {_article(off_reason)} "
+                                f"{off_reason}, so heart rate after standing is not compared."))
         return out
     if len(b) < WARMUP_DAYS:
         return _warming_up(out, len(b), "days")
@@ -372,12 +385,49 @@ def local_briefing(card: dict) -> str:
         parts += [r["explanation"] for r in fired]
     else:
         parts.append("No rule reached a scoring band against their own baseline.")
-    missing = [r["label"].lower() for r in card["rules"] if not r["scored"]]
+    missing = [r["label"].lower() for r in card["rules"] if r["status"] == "not enough data"]
     if missing:
         parts.append("Not enough data for: " + ", ".join(missing) + ".")
+    parts += [r["explanation"] for r in card["rules"] if r["status"] == "off"]
+    dq = card["data_quality"]
+    gaps = f"{len(dq['gaps'])} day(s) without data" if dq["gaps"] else "no gaps"
+    parts.append(f"Data: worn {dq['hours_worn_last_48h']:g} h in the last 48 h; heart rate "
+                 f"{dq['heart_rate']['label']}; {gaps}.")
+    meds = card["record_context"]["medication_changes_30d"]
+    if meds:
+        text = "; ".join(_med_phrase(m) for m in meds)
+        raised = " This raised the priority one level." if card["priority_raised_by"] else ""
+        parts.append(f"Record context (synthetic): {text}.{raised}")
     parts.append("Suggested check: " + card["suggested_check"])
-    parts.append("Rule-based flag on synthetic data; not a medical assessment.")
+    parts.append("Synthetic data. " + PATTERN_NOTE)
     return " ".join(parts)
+
+
+def _article(word: str) -> str:
+    initialism = len(word) > 1 and word[:2].isupper()
+    return "an" if word[:1].lower() in "aeiou" or (initialism and word[0] in "FHLMNRSX") else "a"
+
+
+def _med_phrase(m: dict) -> str:
+    cls, change, ago = m.get("class", "medication"), m.get("change", "changed"), m.get("days_ago")
+    when = f"{ago} days ago" if ago != 1 else "1 day ago"
+    if change == "started":
+        return f"started {_article(cls)} {cls} {when}"
+    return f"{cls} {change} {when}"
+
+
+def record_context(record: dict, as_of: date) -> dict:
+    """Synthetic record context on the card: medication starts or changes in the last 30 days."""
+    meds = []
+    for m in record.get("med_changes") or []:
+        try:
+            ago = (as_of - date.fromisoformat(str(m["on"]))).days
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= ago <= MED_WINDOW_DAYS:
+            meds.append({**m, "days_ago": ago})
+    return {"synthetic": True, "medication_changes_30d": meds, "raises_priority": False, "note": MED_NOTE,
+            "source": SOURCES["medication"]}
 
 
 def windows(as_of: date) -> tuple[list[date], list[date]]:
@@ -386,6 +436,12 @@ def windows(as_of: date) -> tuple[list[date], list[date]]:
     first = recent[0] - timedelta(days=BASELINE_DAYS)
     baseline = [first + timedelta(days=i) for i in range(BASELINE_DAYS)]
     return recent, baseline
+
+
+def _hr_availability(present: Sequence[DayMetrics], of_days: int) -> dict:
+    n = sum(1 for d in present if d.stand_hr_n >= MIN_STANDS_WITH_HR and d.stand_hr_delta_bpm is not None)
+    return {"available_days": n, "of_days": of_days,
+            "label": f"available on {n} of {of_days} days" if n else "not available"}
 
 
 def _rules_on(by_day: dict, as_of: date, record: dict) -> list[dict]:
@@ -415,6 +471,11 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
             if r["contribution"] > 0:
                 fired_span.setdefault(r["rule"], []).append(day.isoformat())
     level = level_for(fired_today, fired_span)
+    context = record_context(record, as_of)
+    raised_by = None
+    if level == LEVEL_LOOK and any(m.get("class") in MED_CLASSES_RAISE for m in context["medication_changes_30d"]):
+        level, raised_by = LEVEL_REVIEW, "medication context"
+    context["raises_priority"] = raised_by is not None
     missing = [r["rule"] for r in rules if r["status"] == "not enough data"]
     if level == LEVEL_LOW and missing:
         # No data is not "nothing changed": keep the resident on the list.
@@ -441,9 +502,15 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "data_quality": {
             "days_present": len(present),
             "days_expected": WINDOW_DAYS + BASELINE_DAYS,
+            "gaps": sorted(d.isoformat() for d in baseline_days + recent_days if d not in by_day),
+            "hours_worn_last_48h": round(sum(d.wear_hours for d in recent if d is not None), 1),
             "wear_hours": round(sum(d.wear_hours for d in present), 1),
+            "heart_rate": _hr_availability(present, WINDOW_DAYS + BASELINE_DAYS),
             "all_rules_scored": all(r["status"] != "not enough data" for r in rules),
         },
+        "record_context": context,
+        "priority_raised_by": raised_by,
+        "pattern_note": PATTERN_NOTE,
         "limits": ["Heart rate alone cannot show blood pressure.",
                    "A change from their usual is a reason to look, not a finding."],
         "method": METHOD,
@@ -516,6 +583,15 @@ COHORT: tuple[tuple[str, str], ...] = (
 )
 assert len(COHORT) == RESIDENT_COUNT
 
+# Synthetic record context (research 1.7): (class, change, days before the end of the record).
+# R-10's night change is raised to "review this shift"; R-01's change alone alerts nothing;
+# R-03's is older than 30 days and is not listed.
+MED_CHANGES: dict[str, tuple[tuple[str, str, int], ...]] = {
+    "R-10": (("antihypertensive", "started", 9),),
+    "R-01": (("opioid", "dose changed", 12),),
+    "R-03": (("antipsychotic", "started", 40),),
+}
+
 
 @dataclass(frozen=True)
 class SyntheticResident:
@@ -581,7 +657,9 @@ def generate_resident(resident_id: str, script: Script, seed: int, end_day: date
             stand_hr_n=len(rises),
             stand_hr_delta_bpm=round(statistics.median(rises), 1) if rises else None,
         ))
-    record = {"hr_rule_off": script.hr_rule_off}
+    record = {"hr_rule_off": script.hr_rule_off,
+              "med_changes": [{"class": c, "change": ch, "on": (end_day - timedelta(days=k)).isoformat()}
+                              for c, ch, k in MED_CHANGES.get(resident_id, ())]}
     return SyntheticResident(resident_id, f"Synthetic resident {resident_id}", script, tuple(rows), record)
 
 
@@ -618,7 +696,7 @@ async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
         if as_of is None:
             return []
     residents = await (await conn.execute(
-        "SELECT id, display_name, hr_rule_off FROM care_residents ORDER BY id")).fetchall()
+        "SELECT id, display_name, hr_rule_off, med_changes FROM care_residents ORDER BY id")).fetchall()
     rows = await (await conn.execute(
         """SELECT * FROM care_daily_metrics WHERE day BETWEEN %s AND %s ORDER BY resident_id, day""",
         (as_of - timedelta(days=RECORD_DAYS - 1), as_of))).fetchall()
@@ -626,7 +704,8 @@ async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
     for row in rows:
         by_resident.setdefault(row["resident_id"], []).append(_day_from_row(row))
     cards = [score_resident(r["id"], r["display_name"], by_resident.get(r["id"], []), as_of,
-                            record={"hr_rule_off": r["hr_rule_off"]}) for r in residents]
+                            record={"hr_rule_off": r["hr_rule_off"], "med_changes": r["med_changes"]})
+             for r in residents]
     async with conn.transaction():
         for card in cards:
             await conn.execute(
@@ -639,6 +718,8 @@ async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
 
 async def seed_synthetic(conn, *, seed: int = DEFAULT_SEED, end_day: Optional[date] = None) -> dict:
     """Replace the synthetic cohort (20 residents x 28 days), then score it. One transaction."""
+    from psycopg.types.json import Jsonb
+
     end_day = end_day or default_end_day()
     cohort = generate_cohort(seed, end_day)
     async with conn.transaction():
@@ -647,10 +728,10 @@ async def seed_synthetic(conn, *, seed: int = DEFAULT_SEED, end_day: Optional[da
         async with conn.cursor() as cur:
             await cur.executemany(
                 """INSERT INTO care_residents (id, display_name, synthetic, script, script_note, expect_flag,
-                                              hr_rule_off)
-                   VALUES (%s, %s, true, %s, %s, %s, %s)""",
+                                              hr_rule_off, med_changes)
+                   VALUES (%s, %s, true, %s, %s, %s, %s, %s)""",
                 [(r.id, r.display_name, r.script.name, r.script.note, r.script.expect_flag,
-                  r.record.get("hr_rule_off")) for r in cohort])
+                  r.record.get("hr_rule_off"), Jsonb(r.record.get("med_changes") or [])) for r in cohort])
             async with cur.copy(f"COPY care_daily_metrics ({', '.join(METRIC_COLUMNS)}) FROM STDIN") as copy:
                 for r in cohort:
                     for d in r.days:
