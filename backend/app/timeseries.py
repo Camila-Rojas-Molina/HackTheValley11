@@ -239,7 +239,10 @@ async def info(conn) -> dict:
 
 # --- reads ---------------------------------------------------------------------------------
 def _f(v, nd: int = 3) -> Optional[float]:
-    return None if v is None else round(float(v), nd)
+    # Not-a-number reads as missing: Toolkit's stddev() of a single value is NaN, and JSON has no NaN.
+    if v is None or not math.isfinite(float(v)):
+        return None
+    return round(float(v), nd)
 
 
 async def zscores(conn, user_id: Optional[str] = None) -> list[dict]:

@@ -467,3 +467,25 @@ async def test_plain_path_prunes_night_out_heart_rate_without_any_telemetry_batc
     async with db.connection() as conn:
         n = (await (await conn.execute("SELECT count(*) AS n FROM hr_samples WHERE user_id = %s", (uid,))).fetchone())["n"]
     assert n == 0
+
+
+async def test_zscore_rows_never_carry_nan_toolkit_one_minute_baseline(client, db, ctx):
+    """Toolkit's stddev(stats_agg(x)) is NaN for a single value; the reply must stay valid JSON."""
+    import json as _json
+
+    import psycopg.sql
+    w = await make_world(client, db, contacts=0, arm=False)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            # Emulate the Toolkit view's output for a wearer with one baseline minute.
+            await conn.execute(psycopg.sql.SQL(
+                """CREATE TEMP VIEW user_zscore_5m AS
+                   SELECT {}::uuid AS user_id, 'hr_bpm'::text AS metric, now() AS last_bucket,
+                          80.0::float8 AS recent_mean, 5::bigint AS recent_minutes, 50::bigint AS recent_samples,
+                          70.0::float8 AS baseline_mean, 'NaN'::float8 AS baseline_sd, 1::bigint AS baseline_minutes,
+                          NULL::float8 AS z, false AS simulated, 'toolkit_stats_agg'::text AS method"""
+            ).format(psycopg.sql.Literal(w.user_id)))
+            rows = await timeseries.zscores(conn, w.user_id)
+            await conn.execute("DROP VIEW pg_temp.user_zscore_5m")
+    assert rows[0]["baseline_sd"] is None
+    _json.dumps(rows, allow_nan=False)  # what Starlette's JSONResponse does
