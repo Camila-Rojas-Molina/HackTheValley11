@@ -7,7 +7,7 @@
 * c.html and hr_bridge.html in headless Chrome (skipped without Chrome)
 
 Each starts its own server on a free port with its own database. Marked `ops` (minutes) and `chaos` (kills a
-process); the fast suite is `pytest -m "not chaos and not ops"`.
+process), and so `slow`; the fast suite is `pytest -m "not slow"`.
 """
 from __future__ import annotations
 

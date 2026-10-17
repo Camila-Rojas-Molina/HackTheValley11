@@ -110,9 +110,29 @@ docker compose down -v                        # stop and delete the local databa
 ## Tests
 
 ```bash
-cd backend && ../.venv/bin/python -m pytest -q                          # everything, about 5 minutes
-cd backend && ../.venv/bin/python -m pytest -q -m "not chaos and not ops"   # fast suite, about 1 minute
+backend/scripts/test_all.sh                                  # every suite in order, then a pass/fail table (about 12 min)
+backend/scripts/test_all.sh unit property contract db        # only these suites
+cd backend && ../.venv/bin/python -m pytest -q -m "not slow"  # fast suite, about 2 minutes
+cd backend && ../.venv/bin/python -m pytest -q -m security    # any one marker
 ```
+
+`scripts/test_all.sh` runs these suites, one pytest marker each (`backend/pytest.ini`; `tests/conftest.py`
+applies them from the file and the fixtures a test uses):
+
+| Suite | What it runs |
+|---|---|
+| `wording` | the banned-wording grep over every shipped file, the READMEs, `docs/` and `.github/` |
+| `unit` | state machine, rules, parsers, care rules: no database |
+| `property` | Hypothesis: random event sequences against the KAZE invariants, on the pure machine and through the API |
+| `contract` | every route: status codes, auth failures, response shapes (a new route without a contract fails) |
+| `db` | integration on plain PostgreSQL (pgserver) |
+| `security` | the regression tests pinned to each review finding (`tests/security_findings.py`) |
+| `load` | 50 device events and 10 contact taps at once: one transition, no lost or doubled outbox rows |
+| `wiring` | the real app (`scripts/run.py`) with no keys: routers vs `docs/API.md`, pages, workers, heart rate, telemetry, PCC, bridge |
+| `e2e` | `scripts/simulate.py`: all seven KAZE scenarios plus the PCC seed |
+| `browser` | `c.html` and `hr_bridge.html` in the installed Google Chrome (Playwright `channel="chrome"`; never `playwright install`) |
+| `chaos` | `kill -9` mid-REMINDED, the database cut under a running server, the bridge holding events across a restart |
+| `tsdb`, `tsdb-db` | start `timescale/timescaledb:latest-pg16` as `stillhere-tsdb-matrix` on `127.0.0.1:55435`, run the migration and time-series tests, then the `db` suite against it, and remove the container. SKIP without Docker (`SKIP_DOCKER=1` skips them on purpose) |
 
 - Unit tests need nothing.
 - Integration tests start a private Postgres with pgserver in `../.pgdata-stillhere`, next to the repo.

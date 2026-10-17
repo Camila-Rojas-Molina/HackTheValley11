@@ -50,6 +50,49 @@ def fresh_database(base_uri: str, name: str) -> str:
     return make_conninfo(base_uri, dbname=name)
 
 
+# --- markers (pytest.ini): applied from the file and the fixtures each test uses -------------------
+FILE_MARKS = {
+    "test_property_invariants.py": ("property",),
+    "test_property_db.py": ("property",),
+    "test_contract_db.py": ("contract",),
+    "test_load_db.py": ("load",),
+    "test_wording.py": ("wording",),
+    "test_care_wording.py": ("wording",),
+    "test_security_regressions.py": ("security",),
+    "test_timeseries_tsdb.py": ("docker",),
+    "test_wiring_live.py": ("wiring",),
+    "test_browser_pages.py": ("browser",),
+    "test_chaos_live.py": ("chaos",),
+}
+NAME_MARKS = {  # (file, test function) -> markers
+    ("test_migrations_db.py", "test_migrations_on_timescaledb_build_hypertables_and_rollups_and_the_core_runs"): ("docker",),
+    ("test_ops_live.py", "test_simulate_runs_all_seven_kaze_scenarios_and_the_pcc_seed"): ("e2e",),
+    ("test_ops_live.py", "test_contact_page_joins_rings_red_on_an_alert_and_takes_both_taps_in_chrome"): ("browser",),
+    ("test_ops_live.py", "test_hr_bridge_sim_fallback_posts_badged_simulated_heart_rate_in_chrome"): ("browser",),
+}
+LIVE = {"ops", "chaos", "docker", "browser", "wiring", "e2e"}
+
+
+def pytest_collection_modifyitems(config, items):
+    from tests.security_findings import all_tests
+    security = all_tests()
+    for item in items:
+        filename = item.path.name
+        func = getattr(item, "originalname", None) or item.name.split("[")[0]
+        names = set(FILE_MARKS.get(filename, ())) | set(NAME_MARKS.get((filename, func), ()))
+        if f"{filename}::{func}" in security:
+            names.add("security")
+        names |= {m.name for m in item.iter_markers()} & LIVE
+        if "pg_base_uri" in getattr(item, "fixturenames", ()):
+            names.add("db")
+        if names & LIVE:
+            names.add("slow")
+        elif "db" not in names:
+            names.add("unit")
+        for name in sorted(names):
+            item.add_marker(getattr(pytest.mark, name))
+
+
 @pytest.fixture(scope="session")
 def pg_base_uri() -> str:
     try:
