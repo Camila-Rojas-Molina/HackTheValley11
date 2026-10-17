@@ -799,8 +799,10 @@ source on the card. Pattern change only: the cards never name a condition and ne
 
 ### `POST /v1/demo/care-seed`
 
-`X-Admin-Key`. Replaces the cohort (20 residents × 28 days ending `end_day`, default yesterday UTC) and
-scores it. Body optional: `{"seed": 11, "end_day": "2026-10-16"}`.
+`X-Admin-Key`. Replaces the cohort's data (20 residents × 28 days ending `end_day`, default yesterday UTC) and
+scores it. Body optional: `{"seed": 11, "end_day": "2026-10-16", "reset": false}`. The residents' push history
+and feedback carry over, so seeding the next day applies the 24 h push budget, the 3-day mute and a
+"Snooze 3 days" pressed on the day before; `"reset": true` forgets them too.
 
 ```json
 {"ok":true,"synthetic":true,"seed":11,"as_of":"2026-10-16","residents":20,"days":28,"rows":560,
@@ -848,7 +850,10 @@ adults).
 band); `review this shift` only when 2 different rules fired in the last 3 days, one of them today; a
 medication start or change in the last 30 days (antihypertensive or an AGS Beers 2023 class) raises a
 `worth a look` card one level and never starts one; `low` otherwise, or `not enough data` when nothing fired
-and a rule could not score.
+and a rule could not score for lack of device data. Heart rate is "when available": a worn device whose
+stand-ups had too little heart rate leaves the card `low` (the heart-rate rule shows `not enough data` and
+`data_quality.heart_rate` says how often it was available). The medication raise is listed on the card under
+`thresholds.medication` (30-day window and the classes), an untested assumption like the other thresholds.
 
 **Delivery:** at most 1 push per resident per 24 h; an identical alert (same level and rules) is muted for
 3 days unless it gets worse; the rest goes to the shift-start digest (`GET /v1/care/digest`).
@@ -873,7 +878,9 @@ and a rule could not score.
 The briefing is written after the score and level are fixed and cannot change them. With `VULTR_API_KEY`
 set, each flagged card's briefing is reworded by Vultr (section 11); `low` and `not enough data` cards are
 not sent. The text is shown only if it passes the wording rules and every number in it is on the card;
-otherwise, and with no key, the card keeps the rule template. Shortened card:
+otherwise, and with no key, the card keeps the rule template. The model never sees the data-quality line or
+the record context, so the template's sentences for both (including "This raised the priority one level.")
+follow its text. Shortened card:
 
 ```json
 {"resident_id":"R-08","display_name":"Synthetic resident R-08","synthetic":true,"as_of":"2026-10-16","score":100,

@@ -17,8 +17,10 @@ GET  /v1/care/feedback    counts per button.
 GET  /v1/care/digest      the shift-start digest: the latest flagged cards that were not pushed (at
                           most 1 push per resident per 24 h; an identical alert is muted 3 days unless
                           it gets worse; snoozed residents), each with the reason (research 1.6).
-POST /v1/demo/care-seed   X-Admin-Key. Body optional: {seed, end_day}. Replaces the synthetic cohort
-                          (20 residents x 28 days, ending end_day, default yesterday UTC) and scores it.
+POST /v1/demo/care-seed   X-Admin-Key. Body optional: {seed, end_day, reset}. Replaces the synthetic
+                          cohort's data (20 residents x 28 days, ending end_day, default yesterday UTC) and
+                          scores it. Push history and feedback carry over (the next day sees yesterday's
+                          pushes and snoozes); reset=true forgets them too.
 
 The reads need no key because every row is synthetic (a CHECK constraint enforces it); put
 them behind auth before any real resident data goes in. Card shape:
@@ -52,6 +54,7 @@ class FeedbackIn(BaseModel):
 class CareSeedIn(BaseModel):
     seed: int = Field(default=care.DEFAULT_SEED, ge=0, le=2 ** 31 - 1)
     end_day: Optional[date] = None
+    reset: bool = False  # also forget the push history and feedback
 
 
 def _require_admin(request: Request) -> None:
@@ -91,7 +94,9 @@ async def word_briefings(cards: list[dict], **vultr_options) -> list[dict]:
         card["briefing_source"] = "template"
     for card, result in zip(worded, results):
         if result["source"] == "vultr":
-            card["briefing"] = result["text"]
+            # The model rewords the rule findings only; the data line and the record context (and why it
+            # raised the priority) are not sent to it, so they follow its text unchanged.
+            card["briefing"] = " ".join([result["text"]] + care.context_sentences(card))
             card["briefing_source"] = "vultr"
     return cards
 
@@ -122,4 +127,4 @@ async def care_seed(request: Request, body: Optional[CareSeedIn] = None):
     _require_admin(request)
     body = body or CareSeedIn()
     async with request.app.state.db.connection() as conn:
-        return await care.seed_synthetic(conn, seed=body.seed, end_day=body.end_day)
+        return await care.seed_synthetic(conn, seed=body.seed, end_day=body.end_day, reset=body.reset)

@@ -82,7 +82,8 @@ async def test_vultr_words_only_the_briefing_of_flagged_cards(client, db, monkey
     assert len(cards) == 5 and len(fake.bodies) == 5
     for c in cards:
         assert c["briefing_source"] == "vultr"
-        assert c["briefing"] == f"{c['display_name']} (SYNTHETIC): {TEXT}"
+        assert c["briefing"] == " ".join([f"{c['display_name']} (SYNTHETIC): {TEXT}"] +
+                                         care.context_sentences(stored[c["resident_id"]]))
         before = stored[c["resident_id"]]
         # The rule engine's decision is untouched: everything but the briefing is the stored card.
         assert {k: v for k, v in c.items() if k not in ("briefing", "briefing_source", "query_ms", "series")} == \
@@ -153,3 +154,20 @@ def test_every_text_the_care_wording_check_flags_is_refused_by_the_briefing_filt
         if hits(text):
             with pytest.raises(vultr.BriefingRejected):
                 vultr.accept_text(completion(text))
+
+
+async def test_a_vultr_briefing_keeps_the_record_context_and_the_data_line(client, db, monkeypatch):
+    await seed(client)
+    stored = await stored_cards(db)
+    use_fake(monkeypatch, FakeVultr(TEXT))
+    cards = (await client.get("/v1/care/alerts")).json()["alerts"]
+    raised = [c for c in cards if c["priority_raised_by"]]
+    assert raised, "the default cohort has a card raised by medication context"
+    for c in cards:
+        assert c["briefing_source"] == "vultr"
+        assert c["briefing"].startswith(f"{c['display_name']} (SYNTHETIC): {TEXT}")
+        template = stored[c["resident_id"]]["briefing"]
+        data_line = next(s for s in care.context_sentences(stored[c["resident_id"]]) if s.startswith("Data: "))
+        assert data_line in template and data_line in c["briefing"]
+    for c in raised:
+        assert "Record context (synthetic)" in c["briefing"] and "This raised the priority one level." in c["briefing"]

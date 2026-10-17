@@ -46,8 +46,9 @@ async def care_counts(db) -> dict:
 
 
 async def seed(client, **body):
-    r = await client.post("/v1/demo/care-seed", json=body or {"seed": care.DEFAULT_SEED, "end_day": END.isoformat()},
-                          headers=ADMIN)
+    """A fresh cohort for each test (reset: no push history or feedback from an earlier test)."""
+    body = body or {"seed": care.DEFAULT_SEED, "end_day": END.isoformat(), "reset": True}
+    r = await client.post("/v1/demo/care-seed", json=body, headers=ADMIN)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -302,3 +303,34 @@ async def test_each_card_shows_its_own_query_time_and_series(client):
         stored = (await (await conn.execute(
             "SELECT card FROM care_alerts WHERE resident_id = 'R-08' ORDER BY as_of DESC LIMIT 1")).fetchone())["card"]
     assert "query_ms" not in stored and "series" not in stored
+
+
+# --- review round 2: snooze, the push budget and the digest work through the API alone ------------------
+async def test_snooze_the_push_budget_and_the_digest_take_effect_through_the_api(client):
+    from datetime import timedelta
+    day1, day2 = END, END + timedelta(days=1)
+    await seed(client, seed=care.DEFAULT_SEED, end_day=day1.isoformat(), reset=True)
+    first = {a["resident_id"]: a for a in (await client.get("/v1/care/alerts")).json()["alerts"]}
+    flagged1 = {i for i, a in first.items() if a["level"] in care.FLAGGED}
+    assert flagged1 and all(first[i]["delivery"]["channel"] == "push" for i in flagged1)
+    before = (await client.get("/v1/care/feedback")).json()["counts"]["snooze_3d"]
+    r = await client.post("/v1/care/alerts/R-08/feedback", json={"action": "snooze_3d"})
+    assert r.status_code == 200 and r.json()["snooze_until"]
+    await seed(client, seed=care.DEFAULT_SEED, end_day=day2.isoformat())          # the next day
+    assert (await client.get("/v1/care/feedback")).json()["counts"]["snooze_3d"] == before + 1
+    second = {a["resident_id"]: a for a in (await client.get("/v1/care/alerts")).json()["alerts"]}
+    r08 = second["R-08"]
+    assert r08["level"] in care.FLAGGED
+    assert r08["delivery"]["channel"] == "digest" and r08["delivery"]["reason"].startswith("snoozed until")
+    budgeted = [i for i in flagged1 if i != "R-08" and second.get(i, {}).get("level") in care.FLAGGED]
+    assert budgeted
+    for i in budgeted:
+        assert second[i]["delivery"]["channel"] == "digest"
+        assert second[i]["delivery"]["reason"].startswith("1 push per resident per 24 h; the last one was at")
+    digest = {d["resident_id"]: d for d in (await client.get("/v1/care/digest")).json()["items"]}
+    assert "R-08" in digest and set(budgeted) <= set(digest)
+    # reset starts the cohort's history over.
+    await seed(client, seed=care.DEFAULT_SEED, end_day=day2.isoformat(), reset=True)
+    third = (await client.get("/v1/care/alerts")).json()["alerts"]
+    assert all(a["delivery"]["channel"] == "push" for a in third if a["level"] in care.FLAGGED)
+    assert (await client.get("/v1/care/feedback")).json()["counts"]["snooze_3d"] == 0

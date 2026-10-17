@@ -82,7 +82,7 @@ def test_default_seed_flags_every_scripted_change_and_nothing_else():
             assert not fired(card)
 
 
-@pytest.mark.parametrize("seed", range(200))
+@pytest.mark.parametrize("seed", list(range(200)) + [666])   # 666: a stable resident short of heart rate
 def test_seed_sweep_scripted_changes_fire_and_no_change_scripts_stay_low(seed):
     for res, card in scored(seed):
         if res.script.expect_flag:
@@ -701,3 +701,43 @@ def test_a_snoozed_resident_goes_to_the_digest():
 def test_budget_constants_and_sources():
     assert care.PUSH_BUDGET_HOURS == 24 and care.MUTE_DAYS == 3
     assert "Ancker 2017" in care.SOURCES["budget"] and "Joint Commission" in care.SOURCES["budget"]
+
+
+# --- review round 2: heart rate is "when available"; the medication raise is a stated threshold ----------
+def test_heart_rate_that_is_not_available_never_makes_a_worn_device_read_as_missing_data():
+    from datetime import datetime, timezone
+    now = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
+    few = flat_days(stand_hr_n=2)                                                  # worn, 2 stands with HR
+    none_ever = [replace(d, stand_hr_n=0, stand_hr_delta_bpm=None) for d in flat_days()]   # never any HR
+    for days in (few, none_ever):
+        card = care.score_resident("X", "Synthetic resident X", days, END)
+        assert rule(card, care.STAND_HR)["status"] == "not enough data"
+        assert card["level"] == care.LEVEL_LOW, card["level"]
+        assert "worn and charged" not in card["suggested_check"] and "worn and charged" not in card["briefing"]
+        assert care.delivery_for(card, [], None, now)["channel"] is None
+    # Motion data really missing (no stand-ups counted) still reads as missing device data.
+    gone = flat_days(stand_ups=0, stand_hr_n=0)
+    assert care.score_resident("X", "X", gone, END)["level"] == care.LEVEL_NO_DATA
+
+
+def test_seed_666_keeps_every_no_change_resident_out_of_the_digest():
+    from datetime import datetime, timezone
+    now = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
+    for res, card in scored(666):
+        if not res.script.expect_flag:
+            assert card["level"] == care.LEVEL_LOW, (res.id, res.script.name, card["level"])
+            assert care.delivery_for(card, [], None, now)["channel"] is None
+
+
+def test_the_medication_raise_is_a_stated_threshold_on_every_card_it_raises():
+    raised = [card for seed in range(40) for _, card in scored(seed) if card["priority_raised_by"]]
+    assert raised
+    for card in raised:
+        t = card["thresholds"]
+        assert card["level"] == care.LEVEL_REVIEW and len(card["fired_last_3_days"]) < 2
+        assert f"{care.MED_WINDOW_DAYS} days" in t["medication"] and "antihypertensive" in t["medication"]
+        assert all(cls in t["medication"] for cls in care.MED_CLASSES_RAISE)
+        assert care.ASSUMPTION in t["medication"]
+        assert "medication" in t["levels"]                    # the levels text allows what the card shows
+        assert card["record_context"]["threshold_status"] == care.ASSUMPTION
+        assert card["record_context"]["window_days"] == care.MED_WINDOW_DAYS

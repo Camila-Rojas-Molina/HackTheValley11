@@ -107,8 +107,10 @@ THRESHOLDS = {
             "and 15 min above it: smaller z >= 2.5 -> 25, >= 4 -> 45 points; baseline SD at least 5% of its mean; "
             "nights worn 4 h+; 7+ valid nights in the 14-day baseline"),
     "levels": ("worth a look this shift when one rule fires today; review this shift only when 2 different "
-               "rules fired in the last 3 days, one of them today; the score never sets the level; not enough "
-               "data when nothing fired and a rule could not score"),
+               "rules fired in the last 3 days, one of them today, or when one rule fires today and the record "
+               "shows a medication start or change that raises the priority (see medication); the score never "
+               "sets the level; not enough data when nothing fired and a rule could not score (heart rate missing "
+               "on a worn device does not count: that rule is 'when available')"),
 }
 MAX_POINTS = {STAND_HR: STAND_HR_BANDS[0][1], NIGHT: NIGHT_BANDS[0][1]}
 assert sum(MAX_POINTS.values()) == 100
@@ -135,6 +137,10 @@ MED_WINDOW_DAYS = 30
 MED_CLASSES_RAISE = ("antihypertensive", "anticholinergic", "antipsychotic", "benzodiazepine", "corticosteroid",
                      "H2 blocker", "Z-drug", "opioid", "SSRI", "SNRI", "TCA", "antiepileptic")
 MED_NOTE = "Medication context raises the priority one level; it never starts an alert on its own."
+THRESHOLDS["medication"] = (
+    f"a start or change in the last {MED_WINDOW_DAYS} days of a medication in one of these classes raises "
+    f"'worth a look this shift' to 'review this shift' (never starts an alert on its own): "
+    f"{', '.join(MED_CLASSES_RAISE)}; {ASSUMPTION}")
 # The line every card carries (research 1.7). The research wording ends in a word the project's
 # wording rules ban (BUILD_PLAN 7.3), so the card says "not a medical assessment" instead.
 PATTERN_NOTE = "Pattern change only - not a medical assessment."
@@ -300,6 +306,9 @@ def rule_stand_hr(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Opt
     out.update(source=SOURCES[STAND_HR], baseline_sd=None, z=None,
                stands_with_hr={"recent": [d.stand_hr_n if d is not None else 0 for d in recent],
                                "baseline_days": len(b)})
+    # Heart rate is "when available" (HeartCast streams it only during a Watch workout): with stand-ups
+    # counted on the last 2 days, a rule short of heart rate means no heart rate, not a device left off.
+    out["heart_rate_unavailable"] = all(d is not None and d.stand_ups >= MIN_STANDS_WITH_HR for d in recent)
     if off_reason:
         out.update(status="off", recent_values=[], baseline_values=[], baseline_days=0,
                    explanation=(f"Off for this resident: the synthetic record notes {_article(off_reason)} "
@@ -416,18 +425,25 @@ def local_briefing(card: dict) -> str:
     if missing:
         parts.append("Not enough data for: " + ", ".join(missing) + ".")
     parts += [r["explanation"] for r in card["rules"] if r["status"] == "off"]
+    parts += context_sentences(card)
+    parts.append("Suggested check: " + card["suggested_check"])
+    parts.append("Synthetic data. " + PATTERN_NOTE)
+    return " ".join(parts)
+
+
+def context_sentences(card: dict) -> list[str]:
+    """The data-quality line and the record context (and whether it raised the priority): part of every
+    briefing, the template's or a model's wording of it (routes/care.py word_briefings)."""
     dq = card["data_quality"]
     gaps = f"{len(dq['gaps'])} day(s) without data" if dq["gaps"] else "no gaps"
-    parts.append(f"Data: worn {dq['hours_worn_last_48h']:g} h in the last 48 h; heart rate "
-                 f"{dq['heart_rate']['label']}; {gaps}.")
+    out = [f"Data: worn {dq['hours_worn_last_48h']:g} h in the last 48 h; heart rate "
+           f"{dq['heart_rate']['label']}; {gaps}."]
     meds = card["record_context"]["medication_changes_30d"]
     if meds:
         text = "; ".join(_med_phrase(m) for m in meds)
         raised = " This raised the priority one level." if card["priority_raised_by"] else ""
-        parts.append(f"Record context (synthetic): {text}.{raised}")
-    parts.append("Suggested check: " + card["suggested_check"])
-    parts.append("Synthetic data. " + PATTERN_NOTE)
-    return " ".join(parts)
+        out.append(f"Record context (synthetic): {text}.{raised}")
+    return out
 
 
 def _article(word: str) -> str:
@@ -454,7 +470,7 @@ def record_context(record: dict, as_of: date) -> dict:
         if 0 <= ago <= MED_WINDOW_DAYS:
             meds.append({**m, "days_ago": ago})
     return {"synthetic": True, "medication_changes_30d": meds, "raises_priority": False, "note": MED_NOTE,
-            "source": SOURCES["medication"]}
+            "window_days": MED_WINDOW_DAYS, "threshold_status": ASSUMPTION, "source": SOURCES["medication"]}
 
 
 def windows(as_of: date) -> tuple[list[date], list[date]]:
@@ -550,7 +566,7 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
     if level == LEVEL_LOOK and any(m.get("class") in MED_CLASSES_RAISE for m in context["medication_changes_30d"]):
         level, raised_by = LEVEL_REVIEW, "medication context"
     context["raises_priority"] = raised_by is not None
-    missing = [r["rule"] for r in rules if r["status"] == "not enough data"]
+    missing = [r["rule"] for r in rules if r["status"] == "not enough data" and not r.get("heart_rate_unavailable")]
     if level == LEVEL_LOW and missing:
         # No data is not "nothing changed": keep the resident on the list.
         level = LEVEL_NO_DATA
@@ -810,20 +826,33 @@ async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
     return cards
 
 
-async def seed_synthetic(conn, *, seed: int = DEFAULT_SEED, end_day: Optional[date] = None) -> dict:
-    """Replace the synthetic cohort (20 residents x 28 days), then score it. One transaction."""
+async def seed_synthetic(conn, *, seed: int = DEFAULT_SEED, end_day: Optional[date] = None,
+                         reset: bool = False) -> dict:
+    """Replace the synthetic cohort's data (20 residents x 28 days), then score it. One transaction.
+
+    The residents' push history and feedback (Snooze 3 days, Useful, ...) are kept, so seeding the next
+    day carries the 24 h push budget, the 3-day mute and a snooze over as they would on a ward;
+    reset=True starts the cohort over without them."""
     from psycopg.types.json import Jsonb
 
     end_day = end_day or default_end_day()
     cohort = generate_cohort(seed, end_day)
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock(%s)", (SEED_LOCK_ID,))
-        await conn.execute("DELETE FROM care_residents")
+        if reset:
+            await conn.execute("DELETE FROM care_residents")  # pushes and feedback go with them
+        else:
+            await conn.execute("DELETE FROM care_residents WHERE NOT id = ANY(%s)", ([r.id for r in cohort],))
+            await conn.execute("DELETE FROM care_daily_metrics")
+            await conn.execute("DELETE FROM care_alerts")
         async with conn.cursor() as cur:
             await cur.executemany(
                 """INSERT INTO care_residents (id, display_name, synthetic, script, script_note, expect_flag,
                                               hr_rule_off, med_changes)
-                   VALUES (%s, %s, true, %s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, true, %s, %s, %s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, script = EXCLUDED.script,
+                          script_note = EXCLUDED.script_note, expect_flag = EXCLUDED.expect_flag,
+                          hr_rule_off = EXCLUDED.hr_rule_off, med_changes = EXCLUDED.med_changes""",
                 [(r.id, r.display_name, r.script.name, r.script.note, r.script.expect_flag,
                   r.record.get("hr_rule_off"), Jsonb(r.record.get("med_changes") or [])) for r in cohort])
             async with cur.copy(f"COPY care_daily_metrics ({', '.join(METRIC_COLUMNS)}) FROM STDIN") as copy:

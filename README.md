@@ -453,7 +453,9 @@ that each card states with its source.
   quality (hours worn, gaps, heart rate available or not), the suggested check, the line "Pattern change
   only - not a medical assessment." and Useful / Not useful / Already known / Snooze 3 days buttons.
 - **Alert budget.** At most 1 push per resident per 24 h; an identical alert is muted for 3 days unless it
-  gets worse; everything else goes to the shift-start digest (`GET /v1/care/digest`).
+  gets worse; everything else goes to the shift-start digest (`GET /v1/care/digest`). Seeding the next day
+  keeps the push history and the feedback buttons' snoozes, so the budget and "Snooze 3 days" show through the
+  API (`"reset": true` starts over).
 - **Tiger Data.** Each card shows `query_ms`, the measured time of its own query.
 - **Briefing (Vultr).** After the score and level are fixed, `GET /v1/care/alerts` sends each flagged card's
   rule findings (no names, no ids) to Vultr Serverless Inference through `app.vultr.abriefing`, so the KAZE
