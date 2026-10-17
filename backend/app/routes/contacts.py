@@ -7,6 +7,7 @@ Wearer side (bearer wearer key):
   DELETE /v1/contacts/{id}          silent: the contact is not told
 Contact side (capability token; cannot arm, see session status or ask for location):
   GET  /c/{token}                       consent / live page
+  GET  /v1/contact/{token}/invite       consent screen: wearer name and contact number (410 if not valid)
   POST /v1/contact/{token}/join         pending until the wearer approves
   GET  /v1/contact/{token}/status       {"alert": null} before an alert (no session data)
   POST /v1/contact/{token}/ack
@@ -174,6 +175,25 @@ async def contact_page(request: Request, token: str):
                                                                    "Referrer-Policy": "no-referrer"})
 
 
+@router.get("/v1/contact/{token}/invite")
+async def invite_info(request: Request, token: str):
+    """What the consent screen needs: whose invite it is and which contact number joining would ask for.
+
+    Nothing about the wearer's session. Unknown, used and expired invites all answer 410.
+    """
+    db = get_db(request)
+    async with db.connection() as conn:
+        inv = await _invite_by_token(conn, token)
+        if inv is None:
+            return JSONResponse({"valid": False}, status_code=410, headers={"Cache-Control": "no-store"})
+        row = await (await conn.execute(
+            """SELECT count(*) AS n, extract(epoch FROM %s::timestamptz - now()) AS left_s FROM contacts
+                WHERE user_id = %s AND approved_at IS NOT NULL AND revoked_at IS NULL""",
+            (inv["invite_expires_at"], inv["user_id"]))).fetchone()
+    return JSONResponse({"valid": True, "wearer": inv["wearer"], "n": int(row["n"]) + 1,
+                         "expires_in_s": max(0, int(row["left_s"]))}, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/contact/{token}/join")
 async def join(request: Request, token: str, body: Optional[JoinIn] = None):
     body = body or JoinIn()
@@ -232,13 +252,19 @@ async def contact_status(request: Request, token: str):
         elif alert["status"] == "ACKED":
             actions = ["safe", "cant_reach"] if you_acked else []
         else:
-            actions = ["ack"] + (["pass"] if not alert["is_final"] else [])
+            # Only the contact at the current level can pass it on (states._on_contact_pass);
+            # earlier contacts who are re-pinged can still take it on.
+            ladder = [c["id"] for c in await engine.approved_contacts(conn, contact["user_id"])]
+            current = (not alert["is_final"] and 0 < alert["level"] <= len(ladder)
+                       and ladder[alert["level"] - 1] == contact["id"])
+            actions = ["ack"] + (["pass"] if current else [])
         body = {
             "alert": {
                 "id": alert["id"],
                 "kind": alert["kind"],
                 "title": messages.CONTACT_PAGE_TITLES[alert["kind"]].format(name=contact["wearer"]),
                 "wearer": contact["wearer"],
+                "level": alert["level"],
                 "final": bool(alert["is_final"]),
                 "banner": states.FINAL_BANNER if alert["is_final"] else None,
                 "status": alert["status"],

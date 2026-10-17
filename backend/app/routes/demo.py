@@ -1,7 +1,8 @@
 """Operator endpoints (X-Admin-Key). Every injected change is logged with actor='demo'.
 
-GET  /v1/admin/timers        pending timers with seconds left
+GET  /v1/admin/timers        pending timers with seconds left (?recent=N: last N fired, with lag)
 GET  /v1/admin/overview      true states (operator view, includes masked alerts)
+GET  /v1/admin/outbox        outbox rows (?session_id=&contact_id=&recipient=&limit=)
 POST /v1/demo/checkin-now    routine check-in now (labelled demo)
 POST /v1/demo/inject         {kind: head_position | fall_like | offbody} -> PULL_FORWARD only
 POST /v1/demo/hr-source      {mode: live | sim:steady | sim:climb_still | sim:lost}
@@ -15,7 +16,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from .. import audit, engine, rules, sensors, states
@@ -96,16 +97,59 @@ async def _masked_open(conn, sid) -> bool:
 
 
 @router.get("/v1/admin/timers")
-async def admin_timers(request: Request):
+async def admin_timers(request: Request, recent: int = Query(default=0, ge=0, le=200)):
+    """Pending timers; with ?recent=N also the N most recently fired ones and how late each fired."""
     require_admin(request)
     async with get_db(request).connection() as conn:
         rows = await (await conn.execute(
             """SELECT id, session_id, kind, fire_at, expected_version,
                       extract(epoch FROM fire_at - now()) AS in_s
                  FROM timers WHERE fired_at IS NULL AND cancelled_at IS NULL ORDER BY fire_at""")).fetchall()
-    return {"timers": [{"id": r["id"], "session_id": str(r["session_id"]), "kind": r["kind"],
-                        "fire_at": r["fire_at"].isoformat(), "in_s": round(float(r["in_s"]), 1),
-                        "expected_version": r["expected_version"]} for r in rows]}
+        fired = []
+        if recent:
+            fired = await (await conn.execute(
+                """SELECT id, session_id, kind, fire_at, fired_at, result, attempts,
+                          extract(epoch FROM fired_at - fire_at) AS lag_s
+                     FROM timers WHERE fired_at IS NOT NULL ORDER BY fired_at DESC, id DESC LIMIT %s""",
+                (recent,))).fetchall()
+    out = {"timers": [{"id": r["id"], "session_id": str(r["session_id"]), "kind": r["kind"],
+                       "fire_at": r["fire_at"].isoformat(), "in_s": round(float(r["in_s"]), 1),
+                       "expected_version": r["expected_version"]} for r in rows]}
+    if recent:
+        out["recent_fired"] = [{"id": r["id"], "session_id": str(r["session_id"]), "kind": r["kind"],
+                                "fire_at": r["fire_at"].isoformat(), "fired_at": r["fired_at"].isoformat(),
+                                "lag_s": round(float(r["lag_s"]), 3), "result": r["result"],
+                                "attempts": r["attempts"]} for r in fired]
+    return out
+
+
+@router.get("/v1/admin/outbox")
+async def admin_outbox(request: Request, session_id: Optional[uuid.UUID] = None, contact_id: Optional[int] = None,
+                       recipient: Optional[Literal["wearer", "contact", "chat"]] = None,
+                       limit: int = Query(default=100, ge=1, le=1000)):
+    """Outbox rows (operator view), newest last. Filters: session_id, contact_id, recipient."""
+    require_admin(request)
+    q = """SELECT id, session_id, alert_id, contact_id, recipient, template, text, status, channel, attempts,
+                  dedupe_key, created_at, sent_at
+             FROM outbox WHERE true"""
+    args: list = []
+    if session_id is not None:
+        q += " AND session_id = %s"
+        args.append(session_id)
+    if contact_id is not None:
+        q += " AND contact_id = %s"
+        args.append(contact_id)
+    if recipient is not None:
+        q += " AND recipient = %s"
+        args.append(recipient)
+    q += " ORDER BY id DESC LIMIT %s"
+    args.append(limit)
+    async with get_db(request).connection() as conn:
+        rows = await (await conn.execute(q, args)).fetchall()
+    return {"outbox": [{**r, "session_id": str(r["session_id"]) if r["session_id"] else None,
+                        "created_at": r["created_at"].isoformat(),
+                        "sent_at": r["sent_at"].isoformat() if r["sent_at"] else None}
+                       for r in reversed(rows)]}
 
 
 @router.get("/v1/admin/overview")

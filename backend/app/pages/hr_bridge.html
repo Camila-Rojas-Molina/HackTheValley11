@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>StillHere HR bridge</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --text: #14161a; --muted: #5b616b; --border: #e2e5e9;
+    --accent: #1d4ed8; --live: #15803d; --live-bg: #e7f6ec; --sim: #9a4b00; --sim-bg: #fff3e0;
+    --idle: #4b5563; --idle-bg: #eef0f3; --err: #b91c1c; --focus: #f59e0b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1114; --surface: #1a1d22; --text: #eef0f3; --muted: #a3a9b3; --border: #2c3138;
+      --accent: #3b82f6; --live: #4ade80; --live-bg: #12291a; --sim: #ffb35c; --sim-bg: #2a2015;
+      --idle: #a3a9b3; --idle-bg: #23272d; --err: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1114; --surface: #1a1d22; --text: #eef0f3; --muted: #a3a9b3; --border: #2c3138;
+    --accent: #3b82f6; --live: #4ade80; --live-bg: #12291a; --sim: #ffb35c; --sim-bg: #2a2015;
+    --idle: #a3a9b3; --idle-bg: #23272d; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 44rem; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin: 0 0 14px; }
+  .badge { display: inline-block; padding: 6px 12px; border-radius: 999px; font-weight: 750; letter-spacing: .03em;
+           background: var(--idle-bg); color: var(--idle); }
+  .badge.live { background: var(--live-bg); color: var(--live); }
+  .badge.sim { background: var(--sim-bg); color: var(--sim); }
+  .reading { display: flex; align-items: baseline; gap: 10px; margin: 12px 0 4px; }
+  .bpm { font-size: 4rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .unit { color: var(--muted); font-size: 1.1rem; }
+  .meta { color: var(--muted); font-size: .92rem; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+  button { min-height: 44px; padding: 10px 16px; font: inherit; font-weight: 650; border-radius: 10px; border: 0;
+           background: var(--accent); color: #fff; cursor: pointer; }
+  button.secondary { background: var(--idle-bg); color: var(--text); border: 1px solid var(--border); }
+  button.sim { background: var(--sim); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  label { display: block; font-weight: 600; margin: 10px 0 0; }
+  label span { font-weight: 400; color: var(--muted); }
+  input, select { display: block; width: 100%; margin-top: 4px; padding: 9px 12px; font: inherit;
+                  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); }
+  .inline { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+  .inline input { width: auto; margin: 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 10px; margin-top: 12px; }
+  .stat { background: var(--bg); border-radius: 10px; padding: 10px; }
+  .stat b { display: block; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+  .warn { color: var(--err); font-weight: 650; }
+  ol.log { margin: 8px 0 0; padding-left: 1.2em; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
+           max-height: 14rem; overflow: auto; }
+  .note { color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Heart-rate bridge</h1>
+  <p class="sub">Apple Watch (HeartCast on the iPhone) → Chrome Web Bluetooth → <code>POST /v1/hr</code>.
+    Heart rate only ever brings a check-in forward.</p>
+
+  <div class="card" aria-live="polite">
+    <span class="badge" id="badge">NOT CONNECTED</span>
+    <div class="reading"><span class="bpm" id="bpm">--</span><span class="unit">bpm</span></div>
+    <div class="meta" id="meta">No samples yet.</div>
+    <div class="meta" id="rr"></div>
+    <div class="stats">
+      <div class="stat">Posted<b id="n-sent">0</b></div>
+      <div class="stat">Waiting<b id="n-queued">0</b></div>
+      <div class="stat">Failed posts<b id="n-failed">0</b></div>
+      <div class="stat">Link<b id="link">idle</b></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p id="secure-warning" class="warn" hidden></p>
+    <div class="row">
+      <button id="connect">Connect Apple Watch (HeartCast)</button>
+      <button id="disconnect" class="secondary" disabled>Disconnect</button>
+    </div>
+    <label for="source">Source label
+      <select id="source">
+        <option value="apple_watch_heartcast">Apple Watch via HeartCast</option>
+        <option value="ble_heart_rate_sensor">Other Bluetooth heart-rate sensor</option>
+      </select>
+    </label>
+    <p class="note">Before connecting: start a HeartCast workout with the iPhone unlocked and HeartCast in front.
+      Reconnecting after a drop also needs HeartCast in front, so rehearse the one-click switch to SIM.
+      Keep this window visible: live samples are posted from the Bluetooth notification handler, and Chrome
+      slows timers in hidden tabs.</p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="sim" class="sim">Start SIM (simulated heart rate)</button>
+      <select id="sim-mode" aria-label="Simulated pattern" style="width:auto">
+        <option value="steady">steady, near your usual</option>
+        <option value="climb">climb while still</option>
+      </select>
+    </div>
+    <p class="note">SIM posts <code>simulated: true</code> with source <code>hr_bridge_sim</code>; everything
+      downstream shows it as SIMULATED. While SIM runs, live samples are shown but not posted.</p>
+  </div>
+
+  <div class="card">
+    <label for="key">Key <span>(wearer key, or a device key together with its device ID)</span>
+      <input id="key" type="password" autocomplete="off" spellcheck="false"></label>
+    <label for="device">Device ID <span>(only with a device key)</span>
+      <input id="device" type="text" autocomplete="off" spellcheck="false" placeholder="scrunchie-1"></label>
+    <label class="inline"><input id="remember" type="checkbox" checked> Remember on this computer</label>
+    <ol class="log" id="log" aria-label="Recent activity"></ol>
+  </div>
+</main>
+<script>
+(function () {
+  "use strict";
+
+  // BEGIN parseHRM
+  // Heart Rate Measurement (0x2A37). Flags bit 0: 16-bit bpm; bit 3: Energy Expended present;
+  // bit 4: RR intervals present (1/1024 s units). Some relays compute RR as 60000/bpm instead of
+  // measuring it; such RR values are flagged rr_synthetic so nothing treats them as real beat timing.
+  function parseHRM(dv) {
+    var f = dv.getUint8(0), i = 1;
+    var bpm = (f & 0x01) ? dv.getUint16(i, true) : dv.getUint8(i);
+    i += (f & 0x01) ? 2 : 1;
+    if (f & 0x08) i += 2;                                  // skip Energy Expended
+    var rr = [];
+    if (f & 0x10) for (; i + 1 < dv.byteLength; i += 2) rr.push(dv.getUint16(i, true) * 1000 / 1024);
+    var rrSynthetic = rr.length > 0 && bpm > 0 && rr.every(function (r) { return Math.abs(r - 60000 / bpm) <= 1; });
+    return {bpm: bpm, rr_ms: rr, rr_synthetic: rrSynthetic};
+  }
+  // END parseHRM
+
+  var $ = function (id) { return document.getElementById(id); };
+  function sget(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function sset(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+
+  var MAX_QUEUE = 300;           // 5 min at 1 Hz; the server re-stamps samples older than 5 min
+  var queue = [], inflight = false, sent = 0, failed = 0, authBroken = false;
+  var device = null, characteristic = null, wantConnected = false, backoff = 1000, reconnectTimer = null;
+  var simTimer = null, simBpm = 72, simBase = 72, lastSampleAt = 0, mode = "idle";
+
+  $("key").value = sget("sh_hr_key") || "";
+  $("device").value = sget("sh_hr_device") || "";
+  function saveCreds() {
+    var keep = $("remember").checked;
+    sset("sh_hr_key", keep ? $("key").value : null);
+    sset("sh_hr_device", keep ? $("device").value : null);
+    authBroken = false;
+  }
+  $("key").addEventListener("change", saveCreds);
+  $("device").addEventListener("change", saveCreds);
+  $("remember").addEventListener("change", saveCreds);
+
+  function log(msg) {
+    var li = document.createElement("li");
+    li.textContent = new Date().toLocaleTimeString() + "  " + msg;
+    var ol = $("log");
+    ol.insertBefore(li, ol.firstChild);
+    while (ol.children.length > 12) ol.removeChild(ol.lastChild);
+  }
+  function counters() {
+    $("n-sent").textContent = sent;
+    $("n-queued").textContent = queue.length;
+    $("n-failed").textContent = failed;
+  }
+  function setMode(m, detail) {
+    mode = m;
+    var b = $("badge");
+    b.className = "badge" + (m === "live" ? " live" : m === "sim" ? " sim" : "");
+    b.textContent = m === "live" ? "LIVE · " + ($("source").selectedOptions[0].textContent)
+                  : m === "sim" ? "SIMULATED SIGNAL" : (detail || "NOT CONNECTED");
+  }
+  function setLink(text) { $("link").textContent = text; }
+
+  if (!window.isSecureContext || !navigator.bluetooth) {
+    var w = $("secure-warning");
+    w.hidden = false;
+    w.textContent = !window.isSecureContext
+      ? "Web Bluetooth needs a secure context. Open this page at http://localhost:8000/hr-bridge in Chrome."
+      : "This browser has no Web Bluetooth. Use Chrome on a Mac or Windows laptop.";
+    $("connect").disabled = true;
+  }
+
+  // ------------------------------------------------------------- posting
+  function headers() {
+    var h = {"Content-Type": "application/json"};
+    var key = $("key").value.trim(), dev = $("device").value.trim();
+    if (key) h["Authorization"] = "Bearer " + key;
+    if (dev) h["X-Device-Id"] = dev;
+    return h;
+  }
+  function enqueue(sample) {
+    if (sample.bpm < 20 || sample.bpm > 250) { return; }   // no reading (e.g. watch off the wrist)
+    queue.push(sample);
+    if (queue.length > MAX_QUEUE) queue.splice(0, queue.length - MAX_QUEUE);
+    counters();
+    flush();
+  }
+  // Called from the BLE notification handler (and from SIM). Never from its own timer.
+  function flush() {
+    if (inflight || !queue.length || authBroken) return;
+    if (!$("key").value.trim()) { setLink("no key"); return; }
+    var first = queue[0], n = 0;
+    while (n < queue.length && n < 600 && queue[n].source === first.source && queue[n].simulated === first.simulated) n++;
+    var batch = queue.splice(0, n);
+    var body = {source: first.source, simulated: first.simulated, samples: batch.map(function (s) {
+      return {t: s.t, bpm: s.bpm, rr_ms: s.rr_ms, rr_synthetic: s.rr_synthetic};
+    })};
+    inflight = true;
+    counters();
+    fetch("/v1/hr", {method: "POST", headers: headers(), body: JSON.stringify(body)})
+      .then(function (r) {
+        if (r.ok) { sent += batch.length; setLink("ok"); return true; }
+        if (r.status === 401 || r.status === 403) {
+          authBroken = true; setLink("wrong key"); log("POST /v1/hr: " + r.status + " (check the key)");
+          queue = batch.concat(queue);
+          return false;
+        }
+        if (r.status === 422) { failed += 1; log("POST /v1/hr: 422, batch dropped"); return false; }
+        throw new Error("HTTP " + r.status);
+      })
+      .catch(function (e) {
+        failed += 1; setLink("retrying");
+        queue = batch.concat(queue);
+        if (queue.length > MAX_QUEUE) queue.splice(0, queue.length - MAX_QUEUE);
+        log("POST /v1/hr failed (" + (e && e.message ? e.message : "network") + "); keeping " + queue.length + " samples");
+        return false;
+      })
+      .then(function (ok) {
+        inflight = false;
+        counters();
+        if (ok && queue.length) flush();    // drain the backlog after a recovery
+      });
+  }
+
+  function showReading(r, simulated) {
+    lastSampleAt = Date.now();
+    $("bpm").textContent = r.bpm > 0 ? String(r.bpm) : "--";
+    $("meta").textContent = (simulated ? "Simulated sample" : "Last sample") + " at " +
+      new Date(lastSampleAt).toLocaleTimeString() + (r.bpm > 0 ? "" : " · no reading");
+    $("rr").textContent = simulated ? "" : (r.rr_ms.length
+      ? "RR intervals: " + r.rr_ms.length + (r.rr_synthetic ? " (computed from bpm by the relay, stored as rr_synthetic)" : " (stored, not analysed)")
+      : "RR intervals: none sent");
+  }
+  setInterval(function () {                // display only
+    if (lastSampleAt && Date.now() - lastSampleAt > 10000) {
+      $("meta").textContent = "No sample for " + Math.round((Date.now() - lastSampleAt) / 1000) + " s.";
+    }
+  }, 1000);
+
+  // ------------------------------------------------------------- Web Bluetooth
+  function onHrm(event) {
+    var r = parseHRM(event.target.value);
+    showReading(r, false);
+    if (simTimer) return;                  // SIM is on: live samples are shown, not posted
+    enqueue({t: Date.now(), bpm: r.bpm, source: $("source").value, simulated: false,
+             rr_ms: r.rr_ms.length ? r.rr_ms.map(function (x) { return Math.round(x * 10) / 10; }) : null,
+             rr_synthetic: r.rr_ms.length ? r.rr_synthetic : null});
+  }
+  function attach() {
+    return device.gatt.connect()
+      .then(function (server) { return server.getPrimaryService("heart_rate"); })                 // 0x180D
+      .then(function (svc) { return svc.getCharacteristic("heart_rate_measurement"); })             // 0x2A37
+      .then(function (ch) {
+        if (characteristic) characteristic.removeEventListener("characteristicvaluechanged", onHrm);
+        characteristic = ch;
+        ch.addEventListener("characteristicvaluechanged", onHrm);
+        return ch.startNotifications();
+      })
+      .then(function () {
+        backoff = 1000;
+        if (!simTimer) setMode("live");
+        log("connected to " + (device.name || "heart-rate sensor"));
+        $("disconnect").disabled = false;
+      });
+  }
+  function scheduleReconnect() {
+    clearTimeout(reconnectTimer);
+    if (!simTimer) setMode("reconnecting", "RECONNECTING…");
+    log("link lost; reconnecting in " + Math.round(backoff / 1000) + " s");
+    reconnectTimer = setTimeout(function () {
+      if (!wantConnected) return;
+      attach().catch(function (e) {
+        backoff = Math.min(backoff * 2, 30000);
+        log("reconnect failed: " + (e && e.message ? e.message : e));
+        scheduleReconnect();
+      });
+    }, backoff);
+  }
+  function onDisconnected() { if (wantConnected) scheduleReconnect(); }
+
+  $("connect").onclick = function () {
+    navigator.bluetooth.requestDevice({filters: [{services: ["heart_rate"]}]})
+      .then(function (d) {
+        if (device && device !== d) device.removeEventListener("gattserverdisconnected", onDisconnected);
+        device = d;
+        device.addEventListener("gattserverdisconnected", onDisconnected);
+        wantConnected = true;
+        return attach();
+      })
+      .catch(function (e) { log("connect: " + (e && e.message ? e.message : e)); });
+  };
+  $("disconnect").onclick = function () {
+    wantConnected = false;
+    clearTimeout(reconnectTimer);
+    if (device && device.gatt.connected) device.gatt.disconnect();
+    $("disconnect").disabled = true;
+    if (!simTimer) setMode("idle");
+    log("disconnected");
+  };
+
+  // ------------------------------------------------------------- SIM (clearly labelled)
+  function simStep() {
+    var m = $("sim-mode").value;
+    if (m === "climb") simBpm = Math.min(simBase + 45, simBpm + 2);
+    else simBpm = Math.max(simBase - 4, Math.min(simBase + 4, simBpm + (Math.random() * 2 - 1)));
+    var bpm = Math.round(simBpm);
+    showReading({bpm: bpm, rr_ms: [], rr_synthetic: false}, true);
+    enqueue({t: Date.now(), bpm: bpm, source: "hr_bridge_sim", simulated: true, rr_ms: null, rr_synthetic: null});
+  }
+  $("sim").onclick = function () {
+    if (simTimer) {
+      clearInterval(simTimer); simTimer = null;
+      $("sim").textContent = "Start SIM (simulated heart rate)";
+      setMode(device && device.gatt && device.gatt.connected ? "live" : "idle");
+      log("SIM stopped");
+      return;
+    }
+    simBpm = simBase;
+    simTimer = setInterval(simStep, 1000);
+    $("sim").textContent = "Stop SIM";
+    setMode("sim");
+    log("SIM started (" + $("sim-mode").value + ")");
+    simStep();
+  };
+  $("sim-mode").onchange = function () { if (simTimer) { simBpm = simBase; log("SIM pattern: " + this.value); } };
+  $("source").onchange = function () { if (mode === "live") setMode("live"); };
+  counters();
+})();
+</script>
+</body>
+</html>

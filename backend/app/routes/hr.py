@@ -5,14 +5,17 @@ simulator). Rules read hr_samples; they can only bring a check-in forward.
 POST /v1/hr  {user_id?, source, simulated, samples:[{t, bpm, rr_ms[], rr_synthetic}]}
              or a single sample {ts, bpm, rr_ms, rr_synthetic, source, simulated}
 Auth: the device key (Authorization + X-Device-Id) or the wearer key.
+GET /hr-bridge serves the Web Bluetooth bridge page (pages/hr_bridge.html).
 """
 from __future__ import annotations
 
 import statistics
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from ..deps import get_db, require_device, require_wearer
@@ -20,6 +23,17 @@ from ..deps import get_db, require_device, require_wearer
 router = APIRouter(tags=["heart rate"])
 
 MAX_SKEW = timedelta(minutes=5)
+PAGES = Path(__file__).resolve().parent.parent / "pages"
+
+
+@router.get("/hr-bridge", response_class=HTMLResponse)
+async def hr_bridge_page():
+    """Chrome Web Bluetooth bridge: Apple Watch (HeartCast) heart rate -> POST /v1/hr.
+
+    Open it at http://localhost:8000/hr-bridge (localhost counts as a secure context).
+    """
+    return HTMLResponse((PAGES / "hr_bridge.html").read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 class HrSample(BaseModel):

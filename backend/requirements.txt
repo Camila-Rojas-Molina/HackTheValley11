@@ -11,6 +11,10 @@ cryptography==50.0.2
 python-dotenv==1.2.4
 tzdata==2026.5
 
+# Ops: scripts/bridge.py talks to the scrunchie over USB serial. Optional; the
+# server and the tests run without it (bridge.py --stdin needs no pyserial).
+pyserial==3.5
+
 # Tests
 pytest==9.1.1
 pytest-asyncio==1.4.0
