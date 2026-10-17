@@ -661,6 +661,24 @@ when either window holds simulated rows. Wearer: own rows. Operator: every user,
 `series=motion` buckets carry `n, enmo_mean, enmo_sd, enmo_max, ax_mean, ay_mean, az_mean, fsr_a_max,
 fsr_b_max, simulated`.
 
+### `GET /v1/telemetry/gaps`
+
+Wearer key (own data) or `X-Admin-Key` (`?user_id=`, default the demo wearer). `?hours=` up to 168, default
+24. A read-only "device sent no data" timeline for the care team (care profile): a sample counts as data for
+60 s, and every longer silence is a dead range. The server's check-in countdown stays the authority; this
+view never changes a session. With TimescaleDB and Toolkit 1.15+ it reads an hourly real-time continuous
+aggregate of `heartbeat_agg` with `rollup()` and `dead_ranges()` (`method: toolkit_heartbeat_agg`, verified on
+TimescaleDB 2.30.2 + Toolkit 1.26.0); otherwise it computes the same ranges with `lead()` over the raw rows
+(`method: plain_lag`). Contact tokens have no access.
+
+```json
+{"user_id":"…","label":"device sent no data","method":"toolkit_heartbeat_agg","liveness_s":60.0,"profile":"care",
+ "from":"2026-10-17T10:23:26+00:00","to":"2026-10-17T11:23:26+00:00",
+ "dead_ranges":[{"start":"2026-10-17T10:23:26+00:00","end":"2026-10-17T10:43:26+00:00","seconds":1200.0,
+                 "start_s_ago":3600.0,"end_s_ago":2400.0}, "…"],
+ "num_gaps":3,"downtime_s":1980.0,"note":"Read-only, for the care team (care profile). …"}
+```
+
 ### `GET /v1/telemetry/info`
 
 `X-Admin-Key`. Which path this database took, versions, retention, hypertables, rollups, scheduled jobs

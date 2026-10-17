@@ -578,3 +578,43 @@ def test_compression_demo_window_is_backdated_past_the_columnstore_policy():
     start, end = timeseries.compression_window(now, days=3)
     assert end == now - timedelta(days=1, hours=1) and start == end - timedelta(days=3)
     assert timeseries.COMPRESSION_PROFILE == "care"          # night_out raw rows are deleted after 48 h
+
+
+# --- research 4.3: "device sent no data" timeline (Toolkit heartbeat_agg, plain fallback) ------------
+async def _stream(db, user_id, spans):
+    """1 Hz raw rows for each (from_s_ago, to_s_ago) span."""
+    async with db.connection() as conn:
+        for a, b in spans:
+            await conn.execute(
+                """INSERT INTO scrunchie_telemetry (time, user_id, profile, ax_mg, ay_mg, az_mg)
+                   SELECT t, %s, 'care', 0, 0, 1000
+                     FROM generate_series(now() - make_interval(secs => %s), now() - make_interval(secs => %s),
+                                          interval '1 second') t""", (user_id, a, b))
+
+
+def _approx(ranges, expected, tol=3.0):
+    assert len(ranges) == len(expected), ranges
+    for r, (a, b) in zip(ranges, expected):
+        assert abs(r["start_s_ago"] - a) <= tol and abs(r["end_s_ago"] - b) <= tol, (r, a, b)
+
+
+async def test_gaps_list_where_the_device_sent_no_data(client, db):
+    w = await make_world(client, db, contacts=0, arm=False)
+    await _stream(db, w.user_id, [(2400, 1800), (1500, 900), (870, 600)])   # 30 s hole: under liveness
+    r = await client.get("/v1/telemetry/gaps?hours=1", headers=w.wearer)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["label"] == "device sent no data" and body["liveness_s"] == 60
+    assert body["method"] in ("plain_lag", "toolkit_heartbeat_agg")
+    assert "countdown" in body["note"] and "never changes a session" in body["note"]
+    _approx(body["dead_ranges"], [(3600, 2400), (1740, 1500), (540, 0)])
+    assert body["num_gaps"] == 3 and abs(body["downtime_s"] - (1200 + 240 + 540)) <= 6
+
+
+async def test_gaps_with_no_data_is_one_range_and_contacts_cannot_read_it(client, db):
+    w = await make_world(client, db, contacts=1, arm=False)
+    body = (await client.get("/v1/telemetry/gaps?hours=1", headers=w.wearer)).json()
+    _approx(body["dead_ranges"], [(3600, 0)])
+    contact = {"Authorization": f"Bearer {w.contacts[0]['token']}"}
+    assert (await client.get("/v1/telemetry/gaps", headers=contact)).status_code == 401
+    assert (await client.get("/v1/telemetry/gaps?hours=200", headers=w.wearer)).status_code == 422

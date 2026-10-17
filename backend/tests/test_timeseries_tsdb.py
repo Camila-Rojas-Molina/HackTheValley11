@@ -107,7 +107,10 @@ async def test_schema_policies_and_versions(conn):
     caggs = {r["view_name"]: r for r in await (await conn.execute(
         """SELECT view_name, hypertable_name, materialization_hypertable_name, materialized_only
              FROM timescaledb_information.continuous_aggregates""")).fetchall()}
-    assert set(caggs) == set(CAGGS)
+    # With Toolkit 1.15+ the device-gap timeline adds its own hourly heartbeat_agg view (research 4.3).
+    gaps_view = {"telemetry_heartbeat_1h"} if "timescaledb_toolkit" in versions else set()
+    assert set(caggs) == set(CAGGS) | gaps_view
+    assert s["gaps_method"] == ("toolkit_heartbeat_agg" if gaps_view else "plain_lag")
     for view, source in CAGGS.items():
         assert caggs[view]["materialized_only"] is False, view          # real-time on every layer
         expected_source = caggs[source]["materialization_hypertable_name"] if source in caggs else source
@@ -126,7 +129,7 @@ async def test_schema_policies_and_versions(conn):
     assert jobs[("stillhere_retention_job", None)]["config"] == {"night_out_after": "48 hours"}
 
     info = await timeseries.info(conn)
-    assert info["timescaledb"] == versions["timescaledb"] and len(info["continuous_aggregates"]) == 6
+    assert info["timescaledb"] == versions["timescaledb"] and len(info["continuous_aggregates"]) == 6 + len(gaps_view)
     assert {j["proc_name"] for j in info["jobs"]} == {"policy_compression", "policy_retention",
                                                       "policy_refresh_continuous_aggregate", "stillhere_retention_job"}
 
@@ -297,3 +300,33 @@ async def test_compression_demo_gives_a_real_ratio(conn):
     assert tel["ratio"] > 2
     again = await timeseries.compression_demo(conn, user, days=2, motion_every_s=1.0, hr_every_s=5.0)
     assert {t["hypertable"]: t for t in again["tables"]}["scrunchie_telemetry"]["number_compressed_chunks"] >= 2
+
+
+async def test_device_gaps_use_toolkit_heartbeat_agg_and_match_the_plain_computation(conn):
+    """research 4.3: Toolkit 1.15+ heartbeat_agg -> dead_ranges, read through the hourly continuous
+    aggregate with rollup(); the plain LAG computation over the same raw rows gives the same ranges."""
+    tk = (await (await conn.execute(
+        "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb_toolkit'")).fetchone())
+    setup = await timeseries.setup(conn)
+    if tk is None:
+        assert setup["gaps_method"] == "plain_lag"
+        pytest.skip("this server has no Toolkit")
+    assert setup["gaps_method"] == "toolkit_heartbeat_agg"
+    user = await _user(conn)
+    await conn.execute(
+        """INSERT INTO scrunchie_telemetry (time, user_id, profile, ax_mg, ay_mg, az_mg)
+           SELECT t, %s, 'care', 0, 0, 1000 FROM (
+             SELECT generate_series(now() - interval '40 min', now() - interval '30 min', interval '1 s') t
+             UNION ALL SELECT generate_series(now() - interval '25 min', now() - interval '15 min', interval '1 s')
+             UNION ALL SELECT generate_series(now() - interval '14 min 30 s', now() - interval '10 min', interval '1 s')) x""",
+        (user,))
+    tk_out = await timeseries.device_gaps(conn, user, hours=1)
+    plain = await timeseries.device_gaps(conn, user, hours=1, method="plain_lag")
+    assert tk_out["method"] == "toolkit_heartbeat_agg" and plain["method"] == "plain_lag"
+    assert tk_out["num_gaps"] == plain["num_gaps"] == 3
+    for a, b in zip(tk_out["dead_ranges"], plain["dead_ranges"]):
+        assert abs(a["start_s_ago"] - b["start_s_ago"]) <= 1 and abs(a["end_s_ago"] - b["end_s_ago"]) <= 1
+    cagg = await (await conn.execute(
+        "SELECT 1 FROM timescaledb_information.continuous_aggregates WHERE view_name = 'telemetry_heartbeat_1h'"
+    )).fetchone()
+    assert cagg is not None

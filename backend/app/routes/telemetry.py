@@ -13,6 +13,8 @@ GET  /v1/telemetry/zscore       last 5 min vs the user's own 7-day baseline, per
 GET  /v1/telemetry/aggregates   ?series=hr|motion&resolution=1m|1h|1d&hours=N
      reads: wearer key (own data) or X-Admin-Key (?user_id=; zscore without it lists every user,
      aggregates without it use the demo wearer). Contact tokens have no access.
+GET  /v1/telemetry/gaps         ?hours=N (<= 168): "device sent no data" ranges for the care profile (Toolkit
+                                heartbeat_agg -> dead_ranges, or the same computed with lead()); read-only
 GET  /v1/telemetry/info         (X-Admin-Key) TimescaleDB or plain path, versions, rollups, jobs
 POST /v1/telemetry/refresh      (X-Admin-Key) {hours <= 47}: materialize the rollups for a backfill
 POST /v1/telemetry/compression-demo  (X-Admin-Key) {user_id?, days, motion_every_s, hr_every_s}: backdated
@@ -157,6 +159,17 @@ async def aggregates(request: Request, series: Literal["hr", "motion"] = "hr",
         rows = await timeseries.aggregates(conn, series=series, resolution=resolution, user_id=who, hours=hours)
     return {"mode": setup["mode"], "series": series, "resolution": resolution, "user_id": who,
             "buckets": rows}
+
+
+@router.get("/v1/telemetry/gaps")
+async def gaps(request: Request, hours: float = Query(default=24.0, gt=0, le=timeseries.GAP_MAX_HOURS),
+               user_id: Optional[uuid.UUID] = None):
+    async with get_db(request).connection() as conn:
+        who = await _reader(request, conn, user_id)
+        if who is None:
+            who = await _demo_user_id(conn)
+        out = await timeseries.device_gaps(conn, who, hours=hours)
+    return {"user_id": who, **out}
 
 
 @router.get("/v1/telemetry/info")

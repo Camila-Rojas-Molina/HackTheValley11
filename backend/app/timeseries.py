@@ -188,9 +188,9 @@ async def ingest(conn, prepared: Prepared, *, user_id: str, device_id: Optional[
 # --- setup / mode ----------------------------------------------------------------------------
 async def setup(conn) -> dict:
     row = await (await conn.execute(
-        "SELECT mode, zscore_method, note FROM timeseries_setup LIMIT 1")).fetchone()
+        "SELECT mode, zscore_method, gaps_method, note FROM timeseries_setup LIMIT 1")).fetchone()
     if row is None:
-        return {"mode": "unknown", "zscore_method": None, "note": "002_timeseries.sql not applied"}
+        return {"mode": "unknown", "zscore_method": None, "gaps_method": None, "note": "002_timeseries.sql not applied"}
     return dict(row)
 
 
@@ -489,3 +489,72 @@ async def compression_demo(conn, user_id, *, days: float = 3.0, motion_every_s: 
             "tables": tables,
             "note": ("Measured by hypertable_columnstore_stats over every compressed chunk of each hypertable; "
                      "the data is SYNTHETIC and labelled simulated.")}
+
+
+# --- "device sent no data" timeline (research 4.3) -----------------------------------------------------
+GAP_LIVENESS = timedelta(seconds=60)     # a sample keeps the device "live" this long (heartbeat_agg)
+GAP_MAX_HOURS = 168
+GAPS_LABEL = "device sent no data"
+GAPS_NOTE = ("Read-only, for the care team (care profile). The server's check-in countdown is the authority; "
+             "this view never changes a session.")
+
+
+def _clip(ranges, lo: datetime, hi: datetime) -> list[tuple[datetime, datetime]]:
+    out = []
+    for a, b in ranges:
+        a, b = max(a, lo), min(b, hi)
+        if b > a:
+            out.append((a, b))
+    return out
+
+
+async def _gaps_plain(conn, user_id, lo: datetime, hi: datetime) -> list[tuple[datetime, datetime]]:
+    rows = await (await conn.execute(
+        """SELECT t, nxt FROM (
+             SELECT time AS t, lead(time) OVER (ORDER BY time) AS nxt FROM scrunchie_telemetry
+              WHERE user_id = %s AND profile = 'care' AND time >= %s AND time <= %s) s
+            WHERE nxt IS NULL OR nxt - t > %s ORDER BY t""",
+        (user_id, lo - GAP_LIVENESS, hi, GAP_LIVENESS))).fetchall()
+    if not rows:
+        return [(lo, hi)]
+    first = (await (await conn.execute(
+        """SELECT min(time) AS t FROM scrunchie_telemetry
+            WHERE user_id = %s AND profile = 'care' AND time >= %s AND time <= %s""",
+        (user_id, lo - GAP_LIVENESS, hi))).fetchone())["t"]
+    ranges = [(lo, first)]
+    for r in rows:
+        ranges.append((r["t"] + GAP_LIVENESS, r["nxt"] if r["nxt"] is not None else hi))
+    return _clip(ranges, lo, hi)
+
+
+async def _gaps_toolkit(conn, user_id, lo: datetime, hi: datetime) -> list[tuple[datetime, datetime]]:
+    row = await (await conn.execute(
+        """SELECT rollup(hb) IS NULL AS empty FROM telemetry_heartbeat_1h
+            WHERE user_id = %s AND bucket >= time_bucket(INTERVAL '1 hour', %s::timestamptz) AND bucket <= %s""",
+        (user_id, lo, hi))).fetchone()
+    if row is None or row["empty"]:
+        return [(lo, hi)]
+    rows = await (await conn.execute(
+        """SELECT d.start AS a, d."end" AS b
+             FROM (SELECT rollup(hb) AS hb FROM telemetry_heartbeat_1h
+                    WHERE user_id = %s AND bucket >= time_bucket(INTERVAL '1 hour', %s::timestamptz)
+                      AND bucket <= %s) x, dead_ranges(x.hb) d
+            ORDER BY d.start""", (user_id, lo, hi))).fetchall()
+    return _clip([(r["a"], r["b"]) for r in rows], lo, hi)
+
+
+async def device_gaps(conn, user_id, *, hours: float = 24.0, method: Optional[str] = None) -> dict:
+    """Where the device sent no data in the last `hours` (care profile): a sample counts as data for 60 s."""
+    if not 0 < hours <= GAP_MAX_HOURS:
+        raise ValueError(f"hours must be in (0, {GAP_MAX_HOURS}]")
+    s = await setup(conn)
+    method = method or s.get("gaps_method") or "plain_lag"
+    hi = (await (await conn.execute("SELECT now() AS now")).fetchone())["now"]
+    lo = hi - timedelta(hours=hours)
+    ranges = await (_gaps_toolkit if method == "toolkit_heartbeat_agg" else _gaps_plain)(conn, user_id, lo, hi)
+    dead = [{"start": a.isoformat(), "end": b.isoformat(), "seconds": round((b - a).total_seconds(), 1),
+             "start_s_ago": round((hi - a).total_seconds(), 1), "end_s_ago": round((hi - b).total_seconds(), 1)}
+            for a, b in ranges]
+    return {"label": GAPS_LABEL, "method": method, "liveness_s": GAP_LIVENESS.total_seconds(),
+            "profile": "care", "from": lo.isoformat(), "to": hi.isoformat(), "dead_ranges": dead,
+            "num_gaps": len(dead), "downtime_s": round(sum(d["seconds"] for d in dead), 1), "note": GAPS_NOTE}
