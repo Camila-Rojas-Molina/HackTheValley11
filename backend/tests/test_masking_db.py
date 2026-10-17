@@ -349,3 +349,22 @@ async def test_export_shows_ended_at_after_either_pin(client, db, ctx):
     ex_d = (await client.get("/v1/me/export", headers=duress.wearer)).json()["sessions"]
     assert ex_r[-1]["ended_at"] is not None and ex_d[-1]["ended_at"] is not None
     assert [sorted(s) for s in ex_r] == [sorted(s) for s in ex_d]
+
+
+async def test_operator_entries_stay_hidden_while_a_masked_alert_is_open(client, db, ctx):
+    from tests.conftest import ADMIN_KEY
+    h = {"X-Admin-Key": ADMIN_KEY}
+    wearer = {"Authorization": "Bearer demo-wearer-key"}
+    sid = (await client.post("/v1/demo/reset", headers=h, json={})).json()["armed"]["session_id"]
+    r = await client.post(f"/v1/sessions/{sid}/cancel", json={"pin": DURESS_PIN}, headers=wearer)
+    assert r.json()["state_public"] == states.ARMED
+    before = (await client.get(f"/v1/sessions/{sid}/timeline", headers=wearer)).json()["entries"]
+    assert (await client.post("/v1/demo/fast-forward", headers=h)).json()["ok"] is True
+    assert (await client.post("/v1/demo/profile", headers=h, json={"profile": "demo"})).json()["ok"] is True
+    after = (await client.get(f"/v1/sessions/{sid}/timeline", headers=wearer)).json()["entries"]
+    assert after == before
+    async with db.connection() as conn:
+        rows = await (await conn.execute(
+            """SELECT kind, masked, alert_id FROM audit_log WHERE session_id = %s
+                AND kind IN ('demo_fast_forward', 'profile_set')""", (sid,))).fetchall()
+    assert len(rows) == 2 and all(r["masked"] and r["alert_id"] is not None for r in rows)

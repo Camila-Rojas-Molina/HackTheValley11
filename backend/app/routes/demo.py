@@ -90,10 +90,12 @@ async def _demo_session(conn, user) -> uuid.UUID:
     return sid
 
 
-async def _masked_open(conn, sid) -> bool:
+async def _masked_alert_id(conn, sid) -> Optional[int]:
+    """The session's open masked alert. Operator entries are tied to it so they stay hidden
+    from the wearer's timeline until it closes, like every other entry it covers."""
     row = await (await conn.execute(
-        "SELECT 1 FROM alerts WHERE session_id = %s AND masked AND status IN ('OPEN', 'ACKED')", (sid,))).fetchone()
-    return row is not None
+        "SELECT id FROM alerts WHERE session_id = %s AND masked AND status IN ('OPEN', 'ACKED')", (sid,))).fetchone()
+    return row["id"] if row is not None else None
 
 
 @router.get("/v1/admin/timers")
@@ -221,9 +223,10 @@ async def set_profile(request: Request, body: ProfileIn):
             user = await _demo_user(conn, ctx)
             sid = await _demo_session(conn, user)
             await conn.execute("UPDATE sessions SET profile = %s WHERE id = %s", (body.profile, sid))
+            masked_alert = await _masked_alert_id(conn, sid)
             await audit.append(conn, chain_key=audit.session_chain(sid), actor="demo", kind="profile_set",
                                user_id=user["id"], session_id=sid, detail={"profile": body.profile},
-                               masked=await _masked_open(conn, sid))
+                               alert_id=masked_alert, masked=masked_alert is not None)
     return {"ok": True, "profile": body.profile}
 
 
@@ -244,9 +247,10 @@ async def fast_forward(request: Request):
                 RETURNING kind""", (sid, list(states.STATE_TIMER_KINDS)))).fetchone()
             if row is None:
                 return {"ok": False, "result": "no pending deadline"}
+            masked_alert = await _masked_alert_id(conn, sid)
             await audit.append(conn, chain_key=audit.session_chain(sid), actor="demo", kind="demo_fast_forward",
                                user_id=user["id"], session_id=sid, detail={"timer": row["kind"]},
-                               masked=await _masked_open(conn, sid))
+                               alert_id=masked_alert, masked=masked_alert is not None)
     return {"ok": True, "fired_next": row["kind"], "label": "fast-forward (demo)"}
 
 
