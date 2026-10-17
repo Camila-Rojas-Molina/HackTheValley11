@@ -83,9 +83,13 @@ _BLOCKED_REVERSED = ("kips", "tacixotni", "suoicsnocnu", "songaid", "tceted", "d
 BLOCKED_STEMS = tuple(s[::-1] for s in _BLOCKED_REVERSED)
 _BLOCKED = re.compile("|".join(BLOCKED_STEMS), re.IGNORECASE)
 # A briefing restates rule findings. It never names a condition and never predicts a time frame.
+# The second half mirrors the senior-mode card rules (tests/test_care_wording.py CARE_BLOCKLIST):
+# no forward-looking claim and no skin-temperature reading, since the briefing is shown on the card.
 _NO_CONDITIONS = re.compile(
     r"\b(?:infection|uti|delirium|dementia|parkinson\w*|stroke|sepsis|pneumonia|dehydrat\w*|disease|"
-    r"disorder|syndrome|illness)\b|\b48\s*(?:–|-|to)\s*72\b",
+    r"disorder|syndrome|illness)\b|\b48\s*(?:–|—|-|to)\s*72\b"
+    r"|hypotension|orthostatic|\bpots\b|urinary|septic|syncope|frail|sedat|hydration"
+    r"|predict|forecast|prevent|will fall|\bfalls?\b|\brisk|early warning|\b72\s*h|skin|temperature|fever",
     re.IGNORECASE)
 _THINK = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")

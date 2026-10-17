@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 import psycopg
 import pytest
 
-from app import care
+from app import care, vultr
 from tests.conftest import ADMIN_KEY
 from tests.test_care_wording import hits
 
@@ -17,6 +17,16 @@ ADMIN = {"X-Admin-Key": ADMIN_KEY}
 END = date(2026, 10, 16)
 KAZE_TABLES = ("users", "devices", "contacts", "sessions", "alerts", "timers", "outbox", "audit_log",
                "location_snapshots", "hr_samples")
+
+
+@pytest.fixture(autouse=True)
+def _no_vultr_key(monkeypatch):
+    """These tests check the rule template; a VULTR_API_KEY in the shell must not reach the network."""
+    for name in ("VULTR_API_KEY", "VULTR_INFERENCE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    vultr.reset_state()
+    yield
+    vultr.reset_state()
 
 
 async def kaze_counts(db) -> dict:
@@ -113,6 +123,8 @@ async def test_stored_cards_match_the_pure_engine(client):
     pure = care.score_cohort(care.generate_cohort(care.DEFAULT_SEED, END), END)
     expected = {c["resident_id"]: json.loads(json.dumps(c)) for c in pure}
     served = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts?include_low=true")).json()["alerts"]}
+    # Without a Vultr key every card keeps the rule template, so served == stored == pure.
+    assert {c.pop("briefing_source") for c in served.values()} == {"template"}
     assert served == expected
 
 

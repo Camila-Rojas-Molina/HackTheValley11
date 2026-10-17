@@ -70,8 +70,10 @@ def app_closure(roots) -> set[str]:
 
 def test_care_import_closure_never_reaches_the_escalation_path():
     closure = app_closure(CARE_MODULES)
-    assert closure <= {"app", "app.routes", "app.care", "app.routes.care", "app.security"}, closure
+    # app.vultr words the briefing of a finished card; it imports nothing from app.
+    assert closure <= {"app", "app.routes", "app.care", "app.routes.care", "app.security", "app.vultr"}, closure
     assert not closure & KAZE_MODULES
+    assert app_closure(["app.vultr"]) == {"app.vultr"}
 
 
 def test_fresh_interpreter_loads_no_kaze_module():
@@ -80,16 +82,20 @@ def test_fresh_interpreter_loads_no_kaze_module():
     out = subprocess.run([sys.executable, "-c", code], cwd=BACKEND, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     loaded = set(json.loads(out.stdout.strip().splitlines()[-1]))
-    assert loaded == {"app", "app.care", "app.routes", "app.routes.care", "app.security"}, loaded
+    assert loaded == {"app", "app.care", "app.routes", "app.routes.care", "app.security", "app.vultr"}, loaded
     assert not loaded & KAZE_MODULES
 
 
 def test_care_uses_no_network_client_or_model():
+    """The rule engine (app.care) has no network client and no model: scores and levels are plain code.
+    The route reaches a model only through app.vultr, for the briefing text."""
+    assert not app_closure(["app.care"]) - {"app", "app.care"}
     externals = {m.split(".")[0] for m in imports_of("app.care") if not m.startswith("app")}
     assert externals <= {"__future__", "random", "statistics", "dataclasses", "datetime", "typing", "psycopg"}, \
         externals
     route_externals = {m.split(".")[0] for m in imports_of("app.routes.care") if not m.startswith("app")}
-    assert route_externals <= {"__future__", "datetime", "typing", "fastapi", "pydantic"}, route_externals
+    assert route_externals <= {"__future__", "asyncio", "datetime", "typing", "fastapi", "pydantic"}, \
+        route_externals
 
 
 def test_kaze_code_does_not_call_into_care():

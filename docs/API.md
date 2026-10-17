@@ -18,8 +18,10 @@ tokens and timestamps shortened.
 5. [Wearer](#5-wearer)
 6. [Contacts](#6-contacts)
 7. [Operator and demo](#7-operator-and-demo)
-8. [Health](#8-health)
-9. [Outbound services](#9-outbound-services)
+8. [Telemetry (Tiger Data)](#8-telemetry-tiger-data)
+9. [Senior mode (PointClickCare, synthetic)](#9-senior-mode-pointclickcare-synthetic)
+10. [Health](#10-health)
+11. [Outbound services](#11-outbound-services)
 
 ## 1. Auth and conventions
 
@@ -29,6 +31,7 @@ tokens and timestamps shortened.
 | Wearer (`/me`) | `Authorization: Bearer <WEARER_KEY>` | `401 {"detail":"wrong wearer key"}` |
 | Contact | the capability token in the URL path; it cannot arm a session, see the session or ask for a location | `404`, `410` |
 | Operator | `X-Admin-Key: <ADMIN_KEY>` | `401 {"detail":"wrong X-Admin-Key"}`; `503` when `ADMIN_KEY` is unset |
+| Senior-mode reads (`/v1/care/*`) | none: every row is synthetic, enforced by a CHECK constraint | — |
 
 - **Database down:** every endpoint that needs the database answers `503 {"ok":false,"error":"database unavailable"}`.
 - **Canonical JSON:** device replies and the wearer's PIN and check-in replies are serialised with sorted keys
@@ -296,11 +299,16 @@ Every session's visible timeline. The server recomputes the per-session and acco
 
 ### `DELETE /v1/me/data`
 
-Deletes the wearer's timeline, location snapshots and raw heart rate, and leaves one tombstone entry.
+Deletes the wearer's timeline, location snapshots, raw heart rate and raw scrunchie telemetry (with its
+batch receipts), and leaves one tombstone entry.
 
 ```json
-{"ok": true, "erased": {"timeline_entries": 32, "hr_samples": 7}}
+{"ok":true,"erased":{"timeline_entries":0,"hr_samples":60490,"telemetry_rows":607804}}
 ```
+
+The rollups in section 8 are not erased on TimescaleDB: their 1-minute rows age out after 8 days and their
+hourly rows after 90 days; daily rows are kept. On plain PostgreSQL the rollups are views over the raw rows,
+so they go with them.
 
 ### `POST /v1/me/telegram-link`
 
@@ -470,7 +478,209 @@ action. They act on the demo wearer (`DEMO_SEED=1`).
 `/v1/demo/inject` can only bring a check-in forward, like a real sensor. `409` when the demo wearer has no
 armed session.
 
-## 8. Health
+## 8. Telemetry (Tiger Data)
+
+Raw accelerometer and squeeze-sensor rows (the `R` lines of the 50 Hz RECORD mode) and heart rate, with
+rollups and a z-score for a dashboard. **Nothing here changes a check-in session, opens an alert or moves a
+timer.** The z-score is informational; it never brings a check-in forward. `scripts/bridge.py` does not
+forward `R` lines yet, so a client posts them here.
+
+On TimescaleDB (Tiger Cloud, or the bundled container) the raw tables are hypertables and the rollups are
+real-time continuous aggregates. On plain PostgreSQL the same names are plain tables and views.
+`GET /v1/telemetry/info` says which path the database took.
+
+| `profile` | Raw rows kept | Used by |
+|---|---|---|
+| `night_out` (default) | 48 h | KAZE: a night out leaves no raw motion or heart-rate trail |
+| `care` | 30 days | Senior mode trends |
+
+Rollups `hr_1m` → `hr_1h` → `hr_1d` and `telemetry_1m` → `telemetry_1h` → `telemetry_1d` keep 8 days at 1 min
+(the z-score baseline needs 7), 90 days at 1 h; daily rows are kept. `POST /v1/hr` stores every sample as
+`night_out`.
+
+Reads take the wearer key (own data only; another `user_id` is `403`) or `X-Admin-Key` (any `?user_id=`).
+A contact token, or any other bearer, gets `401`.
+
+### `POST /v1/telemetry/batch`
+
+Auth: the device key plus `X-Device-Id`, or the wearer key. Stored with one `COPY` per batch.
+
+```json
+{"batch_id": "b7-000123",
+ "rows": [[81000, 12, -30, 1004, 812, 640], [81020, 15, -28, 1001, 815, 642],
+          [81040, 140, -60, 1250, 820, 900], [81060, 90, -20, 980, 818, 700]]}
+```
+
+| Field | Values |
+|---|---|
+| `rows` | 1–6000 rows of `[t, ax_mg, ay_mg, az_mg, fsr_a_mv?, fsr_b_mv?]`. Accelerometer within ±32000 mg; FSR 0–10000 mV or `null` |
+| `clock` | `device_ms` (default): `t` is the device's millisecond counter, and the row at `device_ms_now` (default: the largest `t`) is placed at server time. `epoch`: Unix seconds or milliseconds |
+| `device_ms_now` | the device counter at send time |
+| `profile` | `night_out` (default) or `care` |
+| `simulated` | default `false` |
+| `batch_id` | retry key, 1–128 chars: a repeated `batch_id` is stored once |
+| `device_id` | with the wearer key: one of the wearer's own devices (`403` otherwise) |
+| `user_id` | optional; must match the credential (`403` otherwise) |
+
+```json
+{"ok":true,"duplicate":false,"inserted":4,"dropped":0}
+{"ok":true,"duplicate":true,"inserted":4,"dropped":0}
+```
+
+- `dropped` counts rows that land outside server time − 48 h … + 60 s.
+- A malformed row is `422`, for example `{"detail":"row 0: expected [t, ax_mg, ay_mg, az_mg, fsr_a_mv?, fsr_b_mv?]"}`.
+- 3000 rows (60 s at 50 Hz): median 28 ms per HTTP round trip over 5 runs, against a local TimescaleDB
+  2.30.2 / PostgreSQL 18.6 container.
+
+### `GET /v1/telemetry/zscore`
+
+The view `user_zscore_5m`: per user and metric, the mean of the last 5 minutes against the user's own
+7-day baseline of 1-minute means. `z` is `null` under 30 baseline minutes. Metrics: `hr_bpm` (heart rate)
+and `motion_enmo_mg` (movement: Euclidean norm minus one g, from the accelerometer). `simulated` is true
+when either window holds simulated rows. Wearer: own rows. Operator: every user, or `?user_id=`.
+
+```json
+{"mode":"timescaledb","method":"plain_avg_stddev","window":"last 5 min vs the 7 days before, as 1-minute means",
+ "note":"Informational only. It never changes a check-in session and never alerts anyone.",
+ "rows":[{"user_id":"5beca34f-…","metric":"hr_bpm","last_bucket":"2026-10-17T08:08:00+00:00","recent_mean":91.0,
+          "recent_minutes":3,"recent_samples":10,"baseline_mean":66.0,"baseline_sd":7.135,"baseline_minutes":10079,
+          "z":3.5,"simulated":true,"method":"plain_avg_stddev"},
+         {"user_id":"5beca34f-…","metric":"motion_enmo_mg","last_bucket":"2026-10-17T08:08:00+00:00",
+          "recent_mean":57.588,"recent_minutes":2,"recent_samples":3004,"baseline_mean":16.023,"baseline_sd":8.388,
+          "baseline_minutes":10079,"z":4.96,"simulated":true,"method":"plain_avg_stddev"}]}
+```
+
+`method` is `toolkit_stats_agg` when the `timescaledb_toolkit` extension is installed, else `plain_avg_stddev`.
+
+### `GET /v1/telemetry/aggregates`
+
+`?series=hr|motion&resolution=1m|1h|1d&hours=N&user_id=`. `hours` is at most 48 at `1m`, 744 at `1h` and
+9600 at `1d` (`422` above). One user's buckets, merged across devices and profiles, oldest first. Without
+`user_id` the operator reads the demo wearer.
+
+```json
+{"mode":"timescaledb","series":"hr","resolution":"1h","user_id":"5beca34f-…","buckets":[
+ {"bucket":"2026-10-17T06:00:00+00:00","n":360,"mean":58.139,"sd":2.308,"min":53.0,"max":62.0,"simulated":true},
+ {"bucket":"2026-10-17T07:00:00+00:00","n":360,"mean":59.669,"sd":2.457,"min":55.0,"max":65.0,"simulated":true}]}
+```
+
+`series=motion` buckets carry `n, enmo_mean, enmo_sd, enmo_max, ax_mean, ay_mean, az_mean, fsr_a_max,
+fsr_b_max, simulated`.
+
+### `GET /v1/telemetry/info`
+
+`X-Admin-Key`. Which path this database took, versions, retention, hypertables, rollups, scheduled jobs
+and compression stats (the last four on TimescaleDB only). Shortened:
+
+```json
+{"mode":"timescaledb","zscore_method":"plain_avg_stddev","note":null,"server_version":"16.15",
+ "timescaledb":"2.30.2","timescaledb_toolkit":null,
+ "retention":{"night_out_raw_hours":48.0,"care_raw_days":30,"rollup_1m_days":8,"rollup_1h_days":90},
+ "hypertables":[{"hypertable_name":"hr_samples","num_chunks":8,"compression_enabled":true}, "…"],
+ "continuous_aggregates":[{"view_name":"hr_1m","materialized_only":false,"reads_from":"hr_samples"}, "…"],
+ "jobs":[{"job_id":1014,"proc_name":"stillhere_retention_job","schedule_interval":"01:00:00",
+          "config":{"night_out_after":"48 hours"},"last_run_status":"Success", "…"}, "…"],
+ "columnstore":[{"hypertable":"hr_samples","total_chunks":8,"number_compressed_chunks":0, "…"}, "…"]}
+```
+
+On plain PostgreSQL: `"mode":"plain"` and `"schedule":"none on plain PostgreSQL: raw rows are pruned by the app"`.
+`note` holds the reason when the TimescaleDB setup failed and the plain path was taken instead.
+
+### `POST /v1/telemetry/refresh`
+
+`X-Admin-Key`. `{"hours": 2}` (default 46, at most 47): materializes the rollups for that range, bottom layer
+first, for a backfill that landed behind the refresh policies. A no-op on plain PostgreSQL (`"refreshed":[]`).
+
+```json
+{"ok":true,"mode":"timescaledb","refreshed":["hr_1m","telemetry_1m","hr_1h","telemetry_1h"],
+ "from":"2026-10-17T06:08:11.587100+00:00","to":"2026-10-17T08:08:11.587100+00:00"}
+```
+
+### `POST /v1/telemetry/synthetic`
+
+`X-Admin-Key`. Seeds a labelled SYNTHETIC baseline (`simulated: true`, heart-rate `source` `synthetic`) so
+the z-score has 7 days to compare against. Body (all optional): `user_id` (default the demo wearer; `404`
+if unknown), `days` (≤ 7, default 7), `until_minutes_ago` (default 5), `profile`, `hr_every_s` (default 10),
+`motion_every_s` (default 1). For demo databases only: it refreshes its whole range for every user.
+
+```json
+{"ok":true,"user_id":"5beca34f-…","from":"2026-10-10T08:02:46.589878+00:00","to":"2026-10-17T08:02:46.589878+00:00",
+ "profile":"night_out","hr_rows":60480,"motion_rows":604800,"simulated":true,
+ "refreshed":["hr_1m","telemetry_1m","hr_1h","telemetry_1h","hr_1d","telemetry_1d"]}
+```
+
+## 9. Senior mode (PointClickCare, synthetic)
+
+Twenty synthetic residents × 14 days, scored by fixed rules against each resident's own baseline. Separate
+from KAZE: these routes import nothing on the check-in path and write only the `care_*` tables. Every row,
+card and response is labelled synthetic; every threshold is an untested assumption, and every card says so.
+
+### `POST /v1/demo/care-seed`
+
+`X-Admin-Key`. Replaces the cohort (20 residents × 14 days ending `end_day`, default yesterday UTC) and
+scores it. Body optional: `{"seed": 11, "end_day": "2026-10-16"}`.
+
+```json
+{"ok":true,"synthetic":true,"seed":11,"as_of":"2026-10-16","residents":20,"days":14,"rows":280,
+ "levels":{"low":13,"watch":1,"check today":6},"scripted_change":{"residents":7,"flagged":7},
+ "no_change_scripts":{"residents":13,"flagged":0},
+ "notice":"Hackathon prototype. Synthetic data only; no real residents. Rule-based change flags, not a medical device and not clinically validated. Thresholds are untested assumptions."}
+```
+
+### `GET /v1/care/residents`
+
+Every resident with their latest score and level. `script` is the generator's ground truth, shown for
+checking the rules; the rules never read it (`read_by_rules: false`). Before any seed, `residents` is empty
+and `hint` names the seed endpoint.
+
+```json
+{"synthetic":true,"notice":"Hackathon prototype. …","as_of":"2026-10-16","residents":[
+ {"resident_id":"R-02","display_name":"Synthetic resident R-02","synthetic":true,"days_of_data":14,"as_of":"2026-10-16",
+  "score":30,"level":"check today","script":{"name":"sway_drift","note":"Standing sway rises 5% of usual a day from day 5.",
+  "expected":"flag","read_by_rules":false}}, "…"]}
+```
+
+### `GET /v1/care/alerts`
+
+The latest cards at `watch` or `check today`: `check today` first, then by score. `?include_low=true`
+returns all 20.
+
+| Card field | Meaning |
+|---|---|
+| `score` | 0–100, the sum of the rule contributions (30 + 40 + 30 at most) |
+| `level` | `check today` from 45 points or when any rule reaches its top band; `watch` from 15; else `low` |
+| `rules[]` | `rule, observed, baseline, unit, contribution, explanation`, plus `label, scored, top_band, threshold, change_pct, recent_values, baseline_values, max_contribution, threshold_status` |
+| `suggested_check` | what a care aide does next |
+| `briefing` | plain-language summary of the card |
+| `briefing_source` | `vultr` when Vultr Serverless Inference worded the briefing, else `template` |
+
+The rules: `postural_sway_drift` (quiet-standing sway), `rise_to_settle_time` (time after standing up until
+balance and heart rate have both settled) and `night_restlessness` (both of the last 2 nights above their
+usual). Each compares the last 48 h with the resident's first 48 h in the record.
+
+The briefing is written after the score and level are fixed and cannot change them. With `VULTR_API_KEY`
+set, each `watch` / `check today` card's briefing is reworded by Vultr (section 11); `low` cards are not sent.
+The text is shown only if it passes the wording rules and every number in it is on the card; otherwise,
+and with no key, the card keeps the rule template. Shortened card:
+
+```json
+{"resident_id":"R-18","display_name":"Synthetic resident R-18","synthetic":true,"as_of":"2026-10-16","score":60,
+ "level":"check today",
+ "rules":[{"rule":"postural_sway_drift","label":"Standing sway","observed":0.113,"baseline":0.073,"unit":"m/s²",
+           "change_pct":55,"contribution":30,"max_contribution":30,"top_band":true,"scored":true,
+           "explanation":"Standing sway over the last 48 h: 0.113 m/s² vs 0.073 m/s² in their own 48 h baseline (+55%); at or above the +50% band, 30 points.",
+           "threshold":"+20% -> 15, +35% -> 25, +50% -> 30 points; days worn at least 6 h",
+           "threshold_status":"untested assumption","recent_values":[0.109,0.117],"baseline_values":[0.071,0.075]}, "…"],
+ "suggested_check":"Ask the nurse to review this resident today. Watch their standing balance during transfers and walks today, with their walking aid within reach; note how they slept and any night-time waking on rounds tonight. Tell the nurse what you see.",
+ "briefing":"Synthetic resident R-18: check today, score 60/100 as of 2026-10-16. Standing sway over the last 48 h: … Rule-based flag on synthetic data; not a medical assessment.",
+ "briefing_source":"template",
+ "method":"deterministic rules against the resident's own baseline; no model","thresholds_status":"untested assumption",
+ "recent_window":{"from":"2026-10-15","to":"2026-10-16","hours":48},
+ "baseline_window":{"from":"2026-10-03","to":"2026-10-04","hours":48,"note":"their own first 48 h in this 14-day record"},
+ "data_quality":{"days_present":4,"days_expected":4,"wear_hours":55.3,"all_rules_scored":true}, "…": "…"}
+```
+
+## 10. Health
 
 ### `GET /v1/health`
 
@@ -482,14 +692,14 @@ No auth. `200` when the database answers, `503` with `"db":"down"` otherwise. Th
  "emergency_services": "SIMULATED (never placed)"}
 ```
 
-## 9. Outbound services
+## 11. Outbound services
 
 These are not endpoints of this server; they are listed so the data flows are in one place.
 
 | Service | Used for | Without a key |
 |---|---|---|
 | Telegram Bot API (long polling) | Wearer "Reminder" nudges (mirrored to the Apple Watch), contact alerts with "I'm on it" / "pass it on" / "she's safe" buttons | Messages go to the log channel; contacts use the web page |
-| Vultr Serverless Inference, `POST https://api.vultrinference.com/v1/chat/completions` | Wording the PointClickCare care-team briefing only (`app/vultr.py`: `briefing_text(card)`, async `abriefing_text(card)`). Sends only rule findings, never names or ids; shows the text only if it passes the wording rules and every number in it is on the card | `template_briefing(card)`, deterministic |
+| Vultr Serverless Inference, `POST https://api.vultrinference.com/v1/chat/completions` | Wording the PointClickCare care-team briefing only (`app/vultr.py`: `briefing_text(card)`, async `abriefing_text(card)`; `GET /v1/care/alerts` calls the async one). Sends only rule findings, never names or ids; shows the text only if it passes the wording rules and every number in it is on the card | `template_briefing(card)`, deterministic; on `/v1/care/alerts` the card keeps the rule template |
 
 No KAZE check-in, escalation or alert path calls a model. `tests/test_vultr.py` checks that no escalation
 module imports `app.vultr`.

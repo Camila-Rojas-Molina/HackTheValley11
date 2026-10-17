@@ -403,6 +403,20 @@ async def test_erase_user_raw(client, db):
     assert left["n"] == 0
 
 
+async def test_delete_my_data_erases_raw_telemetry(client, db):
+    w = await make_world(client, db, contacts=0, arm=False)
+    r = await client.post("/v1/telemetry/batch", headers=w.device(), json={"rows": _accel_rows(12, 5), "batch_id": "e"})
+    assert r.json()["inserted"] == 12
+    r = await client.delete("/v1/me/data", headers=w.wearer)
+    assert r.status_code == 200 and r.json()["erased"]["telemetry_rows"] == 12
+    async with db.connection() as conn:
+        left = await (await conn.execute(
+            """SELECT (SELECT count(*) FROM scrunchie_telemetry WHERE user_id = %s)
+                    + (SELECT count(*) FROM telemetry_batches WHERE user_id = %s) AS n""",
+            (w.user_id, w.user_id))).fetchone()
+    assert left["n"] == 0
+
+
 async def test_operator_endpoints(client, db):
     w = await make_world(client, db, contacts=0, arm=False)
     r = await client.post("/v1/telemetry/synthetic", headers=ADMIN, json={

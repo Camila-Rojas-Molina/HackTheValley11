@@ -5,6 +5,9 @@ GET  /v1/care/residents   every synthetic resident with their latest score and l
 GET  /v1/care/alerts      latest alert cards at level "watch" or "check today": "check today" first,
                           then by score
                           (?include_low=true returns every resident's card)
+                          Each "watch" / "check today" card's briefing is worded by Vultr Serverless
+                          Inference when VULTR_API_KEY is set (app/vultr.py); briefing_source says
+                          which text is shown: "vultr", or "template" (care.local_briefing).
 POST /v1/demo/care-seed   X-Admin-Key. Body optional: {seed, end_day}. Replaces the synthetic cohort
                           (20 residents x 14 days, ending end_day, default yesterday UTC) and scores it.
 
@@ -13,18 +16,20 @@ them behind auth before any real resident data goes in. Card shape:
 {resident_id, display_name, synthetic, score 0-100, level, rules: [{rule, observed, baseline,
 unit, contribution, explanation, ...}], suggested_check, briefing, ...}. See app/care.py.
 
-This router imports only app.care and app.security, so nothing here can reach the
-check-in state machine, timers, outbox or Telegram.
+This router imports only app.care, app.security and app.vultr, so nothing here can reach the
+check-in state machine, timers, outbox or Telegram. app.care decides every score and level
+without a model; app.vultr only rewords a finished card's briefing.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .. import care
+from .. import care, vultr
 from ..security import same
 
 router = APIRouter(tags=["senior mode (synthetic)"])
@@ -52,7 +57,29 @@ async def care_residents(request: Request):
 @router.get("/v1/care/alerts")
 async def care_alerts(request: Request, include_low: bool = False):
     async with request.app.state.db.connection() as conn:
-        return await care.list_alerts(conn, include_low=include_low)
+        out = await care.list_alerts(conn, include_low=include_low)
+    await word_briefings(out["alerts"])    # after the connection is back in the pool
+    return out
+
+
+async def word_briefings(cards: list[dict], **vultr_options) -> list[dict]:
+    """Replace the briefing of each "watch" / "check today" card with Vultr's wording, in place.
+
+    Runs on finished cards: score, level, rules and suggested check are already set and are
+    not touched. vultr.abriefing never raises and never blocks the event loop the KAZE timer
+    worker shares. Without a key, on any error or timeout, or when the text breaks the wording
+    rules, the card keeps care.local_briefing and briefing_source is "template". "low" cards
+    are not sent. vultr_options (env, transport) are for tests.
+    """
+    worded = [c for c in cards if c.get("level") != care.LEVEL_LOW]
+    results = await asyncio.gather(*(vultr.abriefing(c, **vultr_options) for c in worded))
+    for card in cards:
+        card["briefing_source"] = "template"
+    for card, result in zip(worded, results):
+        if result["source"] == "vultr":
+            card["briefing"] = result["text"]
+            card["briefing_source"] = "vultr"
+    return cards
 
 
 @router.post("/v1/demo/care-seed")

@@ -12,7 +12,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .. import audit, engine, messages, states
+from .. import audit, engine, messages, states, timeseries
 from ..config import PRESETS
 from ..deps import canonical_json, get_ctx, get_db, require_wearer
 from ..security import classify_pin, new_token, sha256_hex
@@ -225,7 +225,7 @@ async def export(request: Request):
 
 @router.delete("/v1/me/data")
 async def erase(request: Request):
-    """Delete my data: timeline, locations and raw heart rate. Leaves a tombstone."""
+    """Delete my data: timeline, locations, raw heart rate and raw scrunchie telemetry. Leaves a tombstone."""
     db = get_db(request)
     async with db.connection() as conn:
         async with conn.transaction():
@@ -234,10 +234,12 @@ async def erase(request: Request):
             n_audit = (await conn.execute("DELETE FROM audit_log WHERE user_id = %s", (user["id"],))).rowcount
             await conn.execute("DELETE FROM location_snapshots WHERE user_id = %s", (user["id"],))
             n_hr = (await conn.execute("DELETE FROM hr_samples WHERE user_id = %s", (user["id"],))).rowcount
+            n_tel = await timeseries.erase_user_raw(conn, user["id"])
             await conn.execute("SET LOCAL stillhere.erase = 'off'")
             await audit.append(conn, chain_key=audit.user_chain(user["id"]), actor="wearer", kind="timeline_erased",
-                               user_id=user["id"], detail={"audit_rows": n_audit, "hr_rows": n_hr})
-    return {"ok": True, "erased": {"timeline_entries": n_audit, "hr_samples": n_hr}}
+                               user_id=user["id"], detail={"audit_rows": n_audit, "hr_rows": n_hr,
+                                                           "telemetry_rows": n_tel})
+    return {"ok": True, "erased": {"timeline_entries": n_audit, "hr_samples": n_hr, "telemetry_rows": n_tel}}
 
 
 @router.post("/v1/me/telegram-link")
