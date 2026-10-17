@@ -29,14 +29,15 @@ def rule(card, name) -> dict:
 
 
 def day(d: date, **kw) -> care.DayMetrics:
-    base = dict(day=d, wear_hours=14.0, sway_rms=0.06, stand_ups=12, settle_s=20.0, settle_sway_s=16.0,
-                settle_hr_s=20.0, night_restless_min=30.0, night_wear_min=410.0)
+    base = dict(day=d, wear_hours=14.0, sway_rms=0.06, stand_ups=12, settle_s=None, settle_sway_s=16.0,
+                settle_hr_s=None, night_restless_min=30.0, night_wear_min=410.0, stand_hr_n=6,
+                stand_hr_delta_bpm=14.0)
     base.update(kw)
     return care.DayMetrics(**base)
 
 
 def flat_days(**recent_kw) -> list[care.DayMetrics]:
-    """14 identical days; the last two take recent_kw."""
+    """RECORD_DAYS identical days; the last two take recent_kw."""
     out = []
     for i in range(care.RECORD_DAYS):
         d = END - timedelta(days=care.RECORD_DAYS - 1 - i)
@@ -54,8 +55,8 @@ def test_cohort_is_20_residents_by_28_days_all_synthetic():
         assert all(d.synthetic for d in r.days)
         assert r.display_name.startswith("Synthetic resident ")
     names = [r.script.name for r in cohort]
-    assert names.count("stable") >= 9
-    for counter in ("one_off_bad_night", "one_off_bad_night_last", "high_usual"):
+    assert names.count("stable") >= 8
+    for counter in ("one_off_bad_night", "one_off_bad_night_last", "high_usual", "hr_rule_off_pacemaker"):
         assert counter in names
     assert sum(r.script.expect_flag for r in cohort) == 5
     # Sway-only scripts are counter-examples now: sway is shown, never scored (research 1.1).
@@ -108,12 +109,12 @@ def test_high_usual_resident_is_judged_against_their_own_baseline():
     stable = [r for r, _ in results if r.script.name == "stable"]
     assert len(high) == 2
     top_stable_sway = max(d.sway_rms for r in stable for d in r.days)
-    top_stable_settle = max(d.settle_s for r in stable for d in r.days)
+    top_stable_hr = max(d.stand_hr_delta_bpm for r in stable for d in r.days if d.stand_hr_delta_bpm is not None)
     top_stable_night = max(d.night_restless_min for r in stable for d in r.days)
     for res, card in high:
         # Every raw value is above any stable resident's, so a population cut-off would flag them...
         assert min(d.sway_rms for d in res.days) > top_stable_sway
-        assert min(d.settle_s for d in res.days) > top_stable_settle
+        assert min(d.stand_hr_delta_bpm for d in res.days if d.stand_hr_delta_bpm is not None) > top_stable_hr
         assert min(d.night_restless_min for d in res.days) > top_stable_night
         # ...but against their own baseline nothing changed.
         assert card["score"] == 0 and card["level"] == care.LEVEL_LOW
@@ -121,8 +122,9 @@ def test_high_usual_resident_is_judged_against_their_own_baseline():
 
 def test_engine_never_sees_the_script():
     params = list(inspect.signature(care.score_resident).parameters)
-    assert params == ["resident_id", "display_name", "days", "as_of", "briefing"]
-    for fn in (care.score_resident, care.experimental_sway, care.rule_settle, care.rule_night, care.level_for,
+    assert params == ["resident_id", "display_name", "days", "as_of", "briefing", "record"]
+    for fn in (care.score_resident, care.experimental_sway, care.experimental_balance, care.rule_stand_hr,
+               care.rule_night, care.level_for,
                care.suggested_check, care.local_briefing, care.evaluate):
         names = fn.__code__.co_names + fn.__code__.co_varnames
         assert not [n for n in names if "script" in n or "expect" in n], fn.__name__
@@ -146,7 +148,10 @@ def test_every_card_meets_the_shared_contract():
         assert [r["rule"] for r in card["rules"]] == list(care.RULES)
         for r in card["rules"]:
             assert RULE_KEYS <= set(r)
-            assert isinstance(r["observed"], (int, float)) and isinstance(r["baseline"], (int, float))
+            if r["status"] == "scored":
+                assert isinstance(r["observed"], (int, float)) and isinstance(r["baseline"], (int, float))
+            else:
+                assert r["status"] == "off" and r["contribution"] == 0
             assert 0 <= r["contribution"] <= r["max_contribution"]
             assert r["threshold_status"] == "untested assumption" and r["threshold"]
             assert r["explanation"]
@@ -159,13 +164,15 @@ def test_every_card_meets_the_shared_contract():
 def test_raw_numbers_behind_each_rule_are_on_the_card():
     for _, card in scored():
         for r in card["rules"]:
-            assert len(r["recent_values"]) == 2 and len(r["baseline_values"]) == care.BASELINE_DAYS
+            if r["status"] == "off":
+                continue
+            assert len(r["recent_values"]) == 2 and 7 <= len(r["baseline_values"]) <= care.BASELINE_DAYS
             assert r["observed"] == pytest.approx(sum(r["recent_values"]) / 2, abs=0.6)
             n = len(r["baseline_values"])
-            assert r["baseline"] == pytest.approx(sum(r["baseline_values"]) / n, abs=0.6)
-        settle = rule(card, care.SETTLE)
-        assert set(settle["components"]) == {"balance_s", "heart_rate_s"}       # accelerometer + heart rate
-        assert settle["stand_ups"]["recent"] >= care.MIN_STAND_UPS
+            assert r["baseline"] == pytest.approx(sum(r["baseline_values"]) / n, abs=1.0)  # whole minutes
+        hr = rule(card, care.STAND_HR)
+        if hr["status"] == "scored":
+            assert min(hr["stands_with_hr"]["recent"]) >= care.MIN_STANDS_WITH_HR
 
 
 def test_briefing_is_written_after_the_decision_and_cannot_change_it():
@@ -201,20 +208,6 @@ def test_sway_only_scripts_stay_low_but_the_change_is_visible():
             exp = {e["signal"]: e for e in card["experimental"]}[care.SWAY]
             assert exp["observed"] > exp["baseline"], exp           # the drift is on the card...
             assert card["level"] == care.LEVEL_LOW and card["score"] == 0    # ...and scores nothing
-
-
-@pytest.mark.parametrize("settle,points", [(24.0, 0), (25.5, 25), (28.5, 40), (32.5, 55)])
-def test_settle_bands(settle, points):
-    card = care.score_resident("X", "Synthetic resident X", flat_days(settle_s=settle), END)
-    assert rule(card, care.SETTLE)["contribution"] == points
-
-
-def test_settle_needs_a_minimum_change_in_seconds():
-    days = [replace(d, settle_s=10.0) for d in flat_days()]
-    days[-1] = replace(days[-1], settle_s=14.0)
-    days[-2] = replace(days[-2], settle_s=14.0)                       # +40% but only 4 s
-    r = rule(care.score_resident("X", "X", days, END), care.SETTLE)
-    assert r["contribution"] == 0 and "minimum change" in r["explanation"]
 
 
 def test_night_needs_both_nights():
@@ -284,7 +277,7 @@ def test_night_threshold_is_labelled_with_its_sources():
 
 
 def test_lower_values_never_score():
-    card = care.score_resident("X", "X", flat_days(sway_rms=0.03, settle_s=10.0, night_restless_min=5.0), END)
+    card = care.score_resident("X", "X", flat_days(sway_rms=0.03, settle_sway_s=5.0, night_restless_min=5.0), END)
     assert card["score"] == 0 and card["level"] == care.LEVEL_LOW
 
 
@@ -297,14 +290,14 @@ def test_levels(score, top, level):
 
 
 def test_missing_data_scores_nothing_and_says_so():
-    days = flat_days(sway_rms=0.2, settle_s=60.0, night_restless_min=200.0)
+    days = flat_days(sway_rms=0.2, stand_hr_delta_bpm=40.0, night_restless_min=200.0)
     sparse = [d for d in days if d.day != END]                        # the last day never arrived
     card = care.score_resident("X", "Synthetic resident X", sparse, END)
     assert card["score"] == 0 and not card["data_quality"]["all_rules_scored"]
     for r in card["rules"]:
         assert not r["scored"] and r["contribution"] == 0 and r["explanation"].startswith("Not enough data")
     assert "Not enough data for" in card["briefing"]
-    low_wear = [replace(d, wear_hours=2.0, night_wear_min=60.0, stand_ups=2) for d in days]
+    low_wear = [replace(d, wear_hours=2.0, night_wear_min=60.0, stand_ups=2, stand_hr_n=2) for d in days]
     card = care.score_resident("X", "X", low_wear, END)
     assert card["score"] == 0 and not any(r["scored"] for r in card["rules"])
 
@@ -323,9 +316,9 @@ def test_suggested_check_is_for_the_aide_and_points_to_the_nurse():
 def test_missing_device_data_is_never_reported_as_routine_care():
     """A scripted decline whose last two days lost their data must not read 'continue routine care'."""
     cohort = care.generate_cohort(care.DEFAULT_SEED, END)
-    r02 = next(r for r in cohort if r.id == "R-05")  # a scripted settling change
+    r02 = next(r for r in cohort if r.id == "R-05")  # a scripted heart-rate-after-standing change
     assert care.score_resident(r02.id, r02.display_name, r02.days, END)["level"] != care.LEVEL_LOW
-    not_worn = [replace(d, wear_hours=5.0, stand_ups=0) if d.day >= END - timedelta(days=1) else d
+    not_worn = [replace(d, wear_hours=5.0, stand_ups=0, stand_hr_n=0) if d.day >= END - timedelta(days=1) else d
                 for d in r02.days]
     gone = [d for d in r02.days if d.day < END - timedelta(days=1)]
     for days in (not_worn, gone):
@@ -336,23 +329,18 @@ def test_missing_device_data_is_never_reported_as_routine_care():
         assert not card["data_quality"]["all_rules_scored"]
     # Real scores still win: a rule that scored high with others unscored keeps its level.
     days = flat_days(night_restless_min=200.0)
-    days[-1] = replace(days[-1], stand_ups=0)
+    days[-1] = replace(days[-1], stand_ups=0, stand_hr_n=0)
     card = care.score_resident("X", "X", days, END)
     assert card["level"] == care.LEVEL_CHECK and not card["data_quality"]["all_rules_scored"]
 
 
-def test_settle_not_enough_data_text_states_the_rule_it_applies():
-    base = flat_days()
-    twelve_then_none = flat_days()
-    twelve_then_none[-2] = replace(twelve_then_none[-2], stand_ups=12)
-    twelve_then_none[-1] = replace(twelve_then_none[-1], stand_ups=0)
-    r = rule(care.score_resident("X", "X", twelve_then_none, END), care.SETTLE)
-    assert not r["scored"]
-    assert "8+ stand-ups per 48 h" in care.THRESHOLDS[care.SETTLE]
-    assert "8+ stand-ups per 48 h" in r["explanation"] and "on both days" in r["explanation"]
-    assert "8+ stand-ups on both days" not in r["explanation"]  # that is not the rule
-    four_and_four = [replace(d, stand_ups=4) if d.day >= END - timedelta(days=1) else d for d in base]
-    assert rule(care.score_resident("X", "X", four_and_four, END), care.SETTLE)["scored"] is True
+def test_stand_hr_not_enough_data_text_states_the_rule_it_applies():
+    days = flat_days()
+    days[-1] = replace(days[-1], stand_hr_n=2)
+    r = rule(care.score_resident("X", "X", days, END), care.STAND_HR)
+    assert not r["scored"] and r["status"] == "not enough data"
+    assert "3+ stands with heart rate on each of the last 2 days" in r["explanation"]
+    assert "3+ stands with heart rate" in care.THRESHOLDS[care.STAND_HR]
 
 
 # --- research 1.3: rolling 14-day baseline, 7 valid days of warm-up, 28-day record -----------------
@@ -365,7 +353,7 @@ def test_baseline_is_the_14_days_just_before_the_recent_window():
 
 def test_days_before_the_rolling_baseline_do_not_count():
     days = flat_days()
-    early = [replace(d, settle_s=90.0, night_restless_min=300.0, sway_rms=0.5) if d.day < END - timedelta(days=15)
+    early = [replace(d, stand_hr_delta_bpm=60.0, night_restless_min=300.0, sway_rms=0.5) if d.day < END - timedelta(days=15)
              else d for d in days]
     a = care.score_resident("X", "X", days, END)
     b = care.score_resident("X", "X", early, END)
@@ -376,7 +364,7 @@ def test_days_before_the_rolling_baseline_do_not_count():
 def test_no_rule_can_fire_before_7_valid_baseline_days(valid, scores):
     """Warm-up (Rispens 2015: one week gives stable gait measures): fewer than 7 valid days in the
     baseline window means the rule does not score, however large the change."""
-    days = flat_days(settle_s=60.0, night_restless_min=200.0)
+    days = flat_days(stand_hr_delta_bpm=40.0, night_restless_min=200.0)
     _, baseline = care.windows(END)
     keep = set(baseline[len(baseline) - valid:])
     days = [d for d in days if d.day >= END - timedelta(days=1) or d.day in keep]
@@ -392,8 +380,8 @@ def test_no_rule_can_fire_before_7_valid_baseline_days(valid, scores):
 
 def test_scripted_changes_start_after_the_warm_up():
     for script in care.SCRIPTS.values():
-        for onset, ramp in ((script.onset, script.settle_per_day or script.sway_per_day),
-                            (script.night_onset, script.night_per_day)):
+        for onset, ramp in ((script.onset, script.sway_per_day), (script.night_onset, script.night_per_day),
+                            (script.hr_onset, script.hr_shift_bpm)):
             if ramp:
                 assert onset >= care.WARMUP_DAYS + care.WINDOW_DAYS, (script.name, onset)
         if script.bad_night_day is not None:
@@ -407,3 +395,90 @@ def test_card_names_the_rolling_baseline():
     assert bw["to"] == (END - timedelta(days=2)).isoformat()
     assert "rolling" in bw["note"] and "7 valid days" in bw["note"]
     assert card["data_quality"]["days_expected"] == 16
+
+
+# --- research 1.2: heart-rate response to standing replaces "rise to settle" --------------------------
+def hr_days(baseline: list[float], recent: tuple[float, float], **kw) -> list[care.DayMetrics]:
+    days = flat_days()
+    _, window = care.windows(END)
+    by_day = dict(zip(window, baseline))
+    out = []
+    for d in days:
+        if d.day in by_day:
+            d = replace(d, stand_hr_delta_bpm=by_day[d.day])
+        elif d.day == END - timedelta(days=1):
+            d = replace(d, stand_hr_delta_bpm=recent[0], **kw)
+        elif d.day == END:
+            d = replace(d, stand_hr_delta_bpm=recent[1], **kw)
+        out.append(d)
+    return out
+
+
+BASE_14 = [12.0, 16.0] * 7           # usual rise +14 bpm, sample SD 2.08 bpm
+
+
+def test_settle_time_is_gone_and_its_balance_half_is_experimental():
+    assert care.RULES == (care.STAND_HR, care.NIGHT)
+    assert "rise_to_settle_time" not in care.RULES and "rise_to_settle_time" not in care.MAX_POINTS
+    assert care.SETTLE_BALANCE in care.EXPERIMENTAL and care.SETTLE_BALANCE in care.EXPERIMENTAL_NOTES
+    card = care.score_resident("X", "X", flat_days(settle_sway_s=40.0), END)
+    exp = {e["signal"]: e for e in card["experimental"]}[care.SETTLE_BALANCE]
+    assert exp["status"] == "experimental, not scored" and exp["observed"] == 40.0 and card["score"] == 0
+
+
+@pytest.mark.parametrize("recent,points", [
+    ((9.5, 9.5), 0),                 # z -2.2 both days: under 2.5 SD
+    ((8.5, 8.0), 30),                # z -2.6 and -2.9: smaller rise than usual on both days
+    ((3.0, 4.0), 55),                # z -5.3 and -4.8: top band
+    ((20.0, 20.0), 30),              # z +2.9 both days: bigger rise than usual also counts
+    ((8.0, 20.0), 0),                # opposite directions: no points
+    ((8.0, 13.0), 0),                # one day only
+])
+def test_stand_hr_rule_is_z_on_both_days_in_one_direction(recent, points):
+    r = rule(care.score_resident("X", "X", hr_days(BASE_14, recent), END), care.STAND_HR)
+    assert r["scored"] and r["contribution"] == points, r
+    assert r["baseline"] == pytest.approx(14.0, abs=0.05) and r["unit"] == "bpm"
+    assert len(r["z"]) == 2
+
+
+def test_stand_hr_explanation_is_plain_and_names_no_condition():
+    r = rule(care.score_resident("X", "X", hr_days(BASE_14, (3.0, 4.0)), END), care.STAND_HR)
+    assert r["explanation"].startswith("Heart rate rose less than usual after standing")
+    assert "+14 bpm" in r["explanation"] and "Many things can cause this" in r["explanation"]
+    assert "medications or watch fit" in r["explanation"]
+
+
+def test_stand_hr_needs_3_stands_with_heart_rate_on_each_recent_day():
+    days = hr_days(BASE_14, (3.0, 4.0), stand_hr_n=2)
+    r = rule(care.score_resident("X", "X", days, END), care.STAND_HR)
+    assert not r["scored"] and r["contribution"] == 0 and care.MIN_STANDS_WITH_HR == 3
+
+
+def test_stand_hr_sd_floor_is_2_bpm():
+    r = rule(care.score_resident("X", "X", hr_days([14.0] * 14, (10.0, 10.0)), END), care.STAND_HR)
+    assert r["baseline_sd"] == 2.0 and r["z"] == [-2.0, -2.0] and r["contribution"] == 0
+
+
+@pytest.mark.parametrize("reason", ["pacemaker", "non-sinus rhythm"])
+def test_stand_hr_rule_is_off_for_a_pacemaker_or_non_sinus_rhythm(reason):
+    days = hr_days(BASE_14, (3.0, 4.0))
+    card = care.score_resident("X", "Synthetic resident X", days, END, record={"hr_rule_off": reason})
+    r = rule(card, care.STAND_HR)
+    assert r["status"] == "off" and not r["scored"] and r["contribution"] == 0
+    assert reason in r["explanation"] and "not compared" in r["explanation"]
+    assert card["score"] == 0 and card["level"] == care.LEVEL_LOW        # off is not "data missing"
+
+
+def test_pacemaker_counter_example_in_the_cohort_scores_nothing():
+    for res, card in scored():
+        if res.script.name == "hr_rule_off_pacemaker":
+            assert res.record["hr_rule_off"] == "pacemaker"
+            assert rule(card, care.STAND_HR)["status"] == "off" and card["level"] == care.LEVEL_LOW
+
+
+def test_stand_hr_aide_check_points_to_vitals_per_protocol():
+    text = care.AIDE_CHECKS[care.STAND_HR]
+    assert text.startswith("if they seem unsteady or dizzy, consider lying and standing vitals per your protocol")
+    assert "lying 5 min" in text and "1 and 3 min standing" in text
+    assert "SOURCES" in dir(care) and "CDC STEADI" in care.SOURCES[care.STAND_HR]
+    assert "Norcliffe-Kaufmann 2018" in care.SOURCES[care.STAND_HR]

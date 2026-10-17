@@ -412,7 +412,7 @@ def test_cli_check_uses_a_card_the_rule_engine_produces():
     assert {r["rule"] for r in card["rules"]} == set(care.RULES)
     assert card["level"] == care.level_for(card["score"], any(r["top_band"] for r in card["rules"]))
     assert card["level"] in care.FLAGGED and card["synthetic"] is True
-    assert {"s", "min"} == {r["unit"] for r in card["rules"]}  # sway is experimental, not a scored rule
+    assert {"bpm", "min"} == {r["unit"] for r in card["rules"]}  # sway and balance are experimental, not scored
 
 
 def test_template_briefing_does_not_call_the_baseline_recent():

@@ -10,14 +10,19 @@ no-change scripts: stable residents, a one-off bad night, and residents whose us
 are simply high. The script is ground truth for checking the rules; the rules never read it.
 
 Rules. Each compares a resident with their own baseline, never with other residents:
-  rise_to_settle_time   after standing up, the time until balance (accelerometer) and
-                        heart rate have both settled; same two windows
+  stand_hr_response     heart-rate change after standing (when available): mean heart rate
+                        60-180 s after standing minus the 60 s before, daily median, at
+                        z <= -2.5 or >= +2.5 on both of the last 2 days (research 1.2). Off for a
+                        resident whose record notes non-sinus rhythm or a pacemaker. Heart rate
+                        alone cannot show blood pressure, so the suggested check is lying and
+                        standing vitals per the home's protocol, never a named condition.
   night_restlessness    minutes moving at night; both of the last 2 nights must be at least
                         2.5 SD (z) and 15% above their 14-day usual, and 15 min more, so one
                         bad night scores nothing (research 1.4)
 Postural sway is shown on the card greyed out, "experimental, not scored" (research 1.1):
 traditional sway measures were not associated with the outcome studied in 738 older adults
-(Zhou 2017, PMC5462759), and sway measured at the wrist or in the hair is not validated.
+(Zhou 2017, PMC5462759), and sway measured at the wrist or in the hair is not validated. The
+balance half of the old "rise to settle" rule is derived from sway, so it is greyed out too.
 Baseline (research 1.3): rolling, the 14 days just before the recent 48 h (Skubic 2015,
 PMC4848095: "two weeks immediately before the day examined"), so the recent window never
 compares with itself. A rule needs 7 valid days in that baseline before it can score at all
@@ -44,9 +49,10 @@ NOTICE = ("Hackathon prototype. Synthetic data only; no real residents. Rule-bas
 ASSUMPTION = "untested assumption"
 METHOD = "deterministic rules against the resident's own baseline; no model"
 
-SWAY, SETTLE, NIGHT = "postural_sway_drift", "rise_to_settle_time", "night_restlessness"
-RULES = (SETTLE, NIGHT)          # scored
-EXPERIMENTAL = (SWAY,)           # shown greyed out, never scored (research 1.1)
+SWAY, SETTLE_BALANCE = "postural_sway_drift", "settle_balance"
+STAND_HR, NIGHT = "stand_hr_response", "night_restlessness"
+RULES = (STAND_HR, NIGHT)               # scored
+EXPERIMENTAL = (SWAY, SETTLE_BALANCE)   # shown greyed out, never scored (research 1.1, 1.2)
 LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK = "low", "watch", "check today"
 LEVEL_NO_DATA = "not enough data"  # below "watch" with a rule unable to score: the data stopped
 LEVELS = (LEVEL_LOW, LEVEL_WATCH, LEVEL_CHECK, LEVEL_NO_DATA)
@@ -62,12 +68,18 @@ WINDOW_DAYS = 2                 # the recent window: the last 48 h
 BASELINE_DAYS = 14              # rolling baseline: the 14 days before the recent window (Skubic 2015)
 WARMUP_DAYS = 7                 # valid baseline days before any rule can score (Rispens 2015)
 MIN_WEAR_HOURS = 6.0            # a day counts for sway only if worn this long
-MIN_STAND_UPS = 8               # stand-ups needed in each 48 h window
 MIN_NIGHT_WEAR_MIN = 240.0      # a night counts only if worn this long (of 420 min)
-# (change vs baseline, points), highest band first. Sway's 30 points went to the scored rules
-# in proportion (40:30 -> 55:45) when sway left the score (research 1.1).
-SETTLE_BANDS = ((0.60, 55), (0.40, 40), (0.25, 25))
-SETTLE_MIN_CHANGE_S = 5.0       # and at least this many seconds slower
+# Heart-rate response to standing (research 1.2). Per stand-up: mean heart rate 60-180 s after
+# standing minus the mean in the 60 s before (CDC STEADI 2017 takes BP and pulse at 1 and 3 min
+# standing). A day counts with 3+ stand-ups that had heart rate: HeartCast only broadcasts during
+# a Watch workout, so heart rate is "when available". The daily median of both of the last 2
+# days at z <= -2.5 or >= +2.5 against the 14-day baseline, same direction (assumption, the same
+# 2.5 SD as the night rule). The SD is never below 2 bpm: single readings are noisy (Falter 2019,
+# PMC6444219: Apple Watch at seated rest, limits of agreement -20.7 to +28.0 bpm).
+STAND_HR_Z = 2.5
+STAND_HR_BANDS = ((4.0, 55), (2.5, 30))   # (smaller |z| of the 2 days, points)
+MIN_STANDS_WITH_HR = 3
+STAND_HR_SD_FLOOR_BPM = 2.0
 # Night (research 1.4): each of the last 2 nights at z >= +2.5 against the 14-day baseline
 # (Skubic 2015, PMC4848095: alerts at 2.5-4 SD; bed restlessness was the best-rated feature)
 # AND at least +15% (Leung 2023, PMC10431933: >15% change vs own baseline) AND 15 min more.
@@ -82,27 +94,30 @@ WATCH_FROM = 15
 CHECK_TODAY_FROM = 45
 
 THRESHOLDS = {
-    SETTLE: ("+25% -> 25, +40% -> 40, +60% -> 55 points, and at least 5 s slower; 8+ stand-ups per 48 h; "
-             "7+ valid days in the 14-day baseline"),
+    STAND_HR: ("daily median heart-rate change after standing (mean 60-180 s after minus 60 s before) at "
+               "z <= -2.5 or >= +2.5 against the 14-day baseline on both of the last 2 days, same direction: "
+               "smaller |z| >= 2.5 -> 30, >= 4 -> 55 points; 3+ stands with heart rate per day; baseline SD at "
+               "least 2 bpm; 7+ valid days in the 14-day baseline; off for non-sinus rhythm or a pacemaker"),
     NIGHT: ("both of the last 2 nights (2 nights in a row) at z >= +2.5 against the 14-day baseline and +15% "
             "and 15 min above it: smaller z >= 2.5 -> 25, >= 4 -> 45 points; baseline SD at least 5% of its mean; "
             "nights worn 4 h+; 7+ valid nights in the 14-day baseline"),
     "levels": ("watch from 15 points; check today from 45 points or any rule in its top band; "
                "not enough data below 15 points when a rule could not score"),
 }
-MAX_POINTS = {SETTLE: SETTLE_BANDS[0][1], NIGHT: NIGHT_BANDS[0][1]}
+MAX_POINTS = {STAND_HR: STAND_HR_BANDS[0][1], NIGHT: NIGHT_BANDS[0][1]}
 assert sum(MAX_POINTS.values()) == 100
 
 LABELS = {
     SWAY: "Standing sway (experimental, not scored)",
-    SETTLE: "Settling after standing up",
+    SETTLE_BALANCE: "Balance settling after standing up (experimental, not scored)",
+    STAND_HR: "Heart-rate change after standing (when available)",
     NIGHT: "Movement at night",
 }
 
 # Suggested check for the care aide, per rule that scored.
 AIDE_CHECKS = {
-    SETTLE: ("stay with them the first time they stand up after resting, give them time to steady, "
-             "and note it if they say they feel dizzy"),
+    STAND_HR: ("if they seem unsteady or dizzy, consider lying and standing vitals per your protocol "
+               "(lying 5 min; blood pressure and pulse at 1 and 3 min standing)"),
     NIGHT: "note how they slept and any night-time waking on rounds tonight",
 }
 
@@ -113,6 +128,8 @@ EXPERIMENTAL_STATUS = "experimental, not scored"
 EXPERIMENTAL_NOTES = {
     SWAY: ("Shown for the care team only. Traditional sway measures were not linked to the outcome "
            "studied in 738 older adults (Zhou 2017), and sway from a wrist or hair tie is not validated."),
+    SETTLE_BALANCE: ("Shown for the care team only. It is derived from sway, which is not validated from "
+                     "a wrist or hair tie."),
 }
 
 
@@ -127,6 +144,8 @@ class DayMetrics:
     settle_hr_s: Optional[float]
     night_restless_min: Optional[float]
     night_wear_min: Optional[float]
+    stand_hr_n: int = 0                          # stand-ups that had heart rate around them
+    stand_hr_delta_bpm: Optional[float] = None   # median heart-rate change after standing that day
     synthetic: bool = True
 
 
@@ -149,6 +168,9 @@ def _sd(values: Sequence[float], mean: float) -> float:
 
 
 SOURCES = {
+    STAND_HR: ("CDC STEADI 2017 (BP and pulse at 1 and 3 min standing); Norcliffe-Kaufmann 2018 "
+               "(PMC5867255: the blood-pressure criterion needs blood pressure); Falter 2019 (PMC6444219: "
+               "watch heart-rate error at rest)"),
     NIGHT: "Skubic 2015 (PMC4848095: 14-day baseline, 2.5-4 SD); Leung 2023 (PMC10431933: >15%)",
 }
 
@@ -168,6 +190,7 @@ def _rule(rule: str, unit: str, digits: int, recent: Sequence[float], baseline: 
         "max_contribution": MAX_POINTS[rule],
         "change_pct": None,
         "explanation": "",
+        "status": "not enough data",
         "scored": False,
         "top_band": False,
         "recent_values": [round(v, digits) if digits else round(v) for v in recent],
@@ -205,44 +228,67 @@ def experimental_sway(recent: Sequence[Optional[DayMetrics]],
     return out
 
 
-def rule_settle(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Optional[DayMetrics]]) -> dict:
+def experimental_balance(recent: Sequence[Optional[DayMetrics]],
+                         baseline: Sequence[Optional[DayMetrics]]) -> dict:
+    """Balance settling time after standing, recent vs baseline, for display only (research 1.2)."""
     def usable(days):
-        return [d for d in days if d is not None and d.settle_s is not None and d.stand_ups > 0]
+        return [d.settle_sway_s for d in days if d is not None and d.settle_sway_s is not None]
 
     r, b = usable(recent), usable(baseline)
-    out = _rule(SETTLE, "s", 1, [d.settle_s for d in r], [d.settle_s for d in b])
-    n_r, n_b = sum(d.stand_ups for d in r), sum(d.stand_ups for d in b)
-    out["stand_ups"] = {"recent": n_r, "baseline": n_b}
+    out = {"signal": SETTLE_BALANCE, "label": LABELS[SETTLE_BALANCE], "status": EXPERIMENTAL_STATUS, "unit": "s",
+           "observed": round(_mean(r), 1) if r else None, "baseline": round(_mean(b), 1) if b else None,
+           "change_pct": None, "contribution": 0, "note": EXPERIMENTAL_NOTES[SETTLE_BALANCE]}
+    if r and b and _mean(b) > 0:
+        out["change_pct"] = _pct(_mean(r) / _mean(b) - 1.0)
+    return out
+
+
+def rule_stand_hr(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Optional[DayMetrics]],
+                  off_reason: Optional[str] = None) -> dict:
+    """Heart-rate change after standing vs the resident's own 14-day usual (research 1.2)."""
+    def valid(days):
+        return [d for d in days if d is not None and d.stand_hr_delta_bpm is not None
+                and d.stand_hr_n >= MIN_STANDS_WITH_HR]
+
+    r, b = valid(recent), valid(baseline)
+    out = _rule(STAND_HR, "bpm", 1, [d.stand_hr_delta_bpm for d in r], [d.stand_hr_delta_bpm for d in b])
+    out.update(source=SOURCES[STAND_HR], baseline_sd=None, z=None,
+               stands_with_hr={"recent": [d.stand_hr_n if d is not None else 0 for d in recent],
+                               "baseline_days": len(b)})
+    if off_reason:
+        out.update(status="off", recent_values=[], baseline_values=[], baseline_days=0,
+                   explanation=(f"Off for this resident: the synthetic record notes {off_reason}, so heart rate "
+                                "after standing is not compared."))
+        return out
     if len(b) < WARMUP_DAYS:
         return _warming_up(out, len(b), "days")
-    if len(r) < WINDOW_DAYS or n_r < MIN_STAND_UPS:
-        return _not_enough(out, f"needs stand-ups on both days and {MIN_STAND_UPS}+ stand-ups per 48 h window")
-    obs, base = _mean([d.settle_s for d in r]), _mean([d.settle_s for d in b])
-    if base <= 0:
-        return _not_enough(out, "baseline is zero")
-    parts = {}
-    for key, attr in (("balance_s", "settle_sway_s"), ("heart_rate_s", "settle_hr_s")):
-        rv = [getattr(d, attr) for d in r if getattr(d, attr) is not None]
-        bv = [getattr(d, attr) for d in b if getattr(d, attr) is not None]
-        parts[key] = {"observed": round(_mean(rv), 1) if rv else None,
-                      "baseline": round(_mean(bv), 1) if bv else None}
-    out["components"] = parts
-    change, delta = obs / base - 1.0, obs - base
-    points, cut = _band(change, SETTLE_BANDS)
-    small = bool(points) and delta < SETTLE_MIN_CHANGE_S
-    if small:
-        points = 0
-    out.update(observed=round(obs, 1), baseline=round(base, 1), change_pct=_pct(change), scored=True,
-               contribution=points, top_band=points == SETTLE_BANDS[0][1])
-    head = (f"After standing up, balance and heart rate took {obs:.0f} s to settle over the last 48 h vs "
-            f"{base:.0f} s in their own 14-day baseline ({_pct(change):+d}%; {n_r} stand-ups recently, "
-            f"{len(b)} baseline days)")
+    if len(r) < WINDOW_DAYS:
+        return _not_enough(out, f"needs {MIN_STANDS_WITH_HR}+ stands with heart rate on each of the last "
+                                f"{WINDOW_DAYS} days")
+    vals = [d.stand_hr_delta_bpm for d in r]
+    base = _mean([d.stand_hr_delta_bpm for d in b])
+    raw_sd = statistics.stdev([d.stand_hr_delta_bpm for d in b])
+    sd = max(raw_sd, STAND_HR_SD_FLOOR_BPM)
+    zs = [(x - base) / sd for x in vals]
+    lower = all(z <= -STAND_HR_Z for z in zs)
+    higher = all(z >= STAND_HR_Z for z in zs)
+    points, _ = _band(min(abs(z) for z in zs), STAND_HR_BANDS) if (lower or higher) else (0, None)
+    obs = _mean(vals)
+    out.update(observed=round(obs, 1), baseline=round(base, 1), baseline_sd=round(sd, 1),
+               z=[round(z, 1) for z in zs], change_pct=_pct(obs / base - 1.0) if base else None,
+               scored=True, status="scored", contribution=points, top_band=points == STAND_HR_BANDS[0][1])
+    stands = " and ".join(str(d.stand_hr_n) for d in r)
+    shown_z = " and ".join(f"{z:+.1f}" for z in zs)
+    usual = f"their usual {base:+.0f} bpm over the 14-day baseline, SD {sd:.1f}"
     if points:
-        out["explanation"] = f"{head}; at or above the +{_pct(cut)}% band, {points} points."
-    elif small:
-        out["explanation"] = f"{head}; under the {SETTLE_MIN_CHANGE_S:g} s minimum change, no points."
+        way = "less" if lower else "more"
+        out["explanation"] = (f"Heart rate rose {way} than usual after standing (avg {obs:+.1f} vs {usual}; "
+                              f"z {shown_z}; {stands} stands with heart rate). Many things can cause this, "
+                              f"including medications or watch fit; {points} points.")
     else:
-        out["explanation"] = f"{head}; below the +{_pct(SETTLE_BANDS[-1][0])}% band, no points."
+        out["explanation"] = (f"Heart-rate change after standing over the last 2 days: "
+                              f"{' and '.join(f'{x:+.1f}' for x in vals)} bpm vs {usual} (z {shown_z}); not "
+                              f"{STAND_HR_Z:g} SD away on both days in one direction, no points.")
     return out
 
 
@@ -269,7 +315,7 @@ def rule_night(recent: Sequence[Optional[DayMetrics]], baseline: Sequence[Option
     n_above = sum(1 for x, z in zip(r, zs) if above(x, z))
     points, cut = _band(min(zs), NIGHT_BANDS) if n_above == len(r) else (0, None)
     out.update(observed=round(obs), baseline=round(base), baseline_sd=round(sd, 1), z=[round(z, 1) for z in zs],
-               change_pct=_pct(obs / base - 1.0), scored=True, contribution=points,
+               change_pct=_pct(obs / base - 1.0), scored=True, status="scored", contribution=points,
                top_band=points == NIGHT_BANDS[0][1])
     shown = " and ".join(f"{x:.0f}" for x in r)
     shown_z = " and ".join(f"{z:+.1f}" for z in zs)
@@ -335,16 +381,18 @@ def windows(as_of: date) -> tuple[list[date], list[date]]:
 
 
 def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetrics], as_of: date,
-                   briefing: Optional[Callable[[dict], str]] = None) -> dict:
-    """The alert card for one resident. Reads only that resident's metrics: never the script."""
+                   briefing: Optional[Callable[[dict], str]] = None, record: Optional[dict] = None) -> dict:
+    """The alert card for one resident. Reads only that resident's metrics and record context
+    (e.g. hr_rule_off), never the generator's script."""
+    record = record or {}
     by_day = {d.day: d for d in days}
     recent_days, baseline_days = windows(as_of)
     recent = [by_day.get(d) for d in recent_days]
     baseline = [by_day.get(d) for d in baseline_days]
-    rules = [rule_settle(recent, baseline), rule_night(recent, baseline)]
+    rules = [rule_stand_hr(recent, baseline, record.get("hr_rule_off")), rule_night(recent, baseline)]
     score = sum(r["contribution"] for r in rules)
     level = level_for(score, any(r["top_band"] for r in rules))
-    missing = [r["rule"] for r in rules if not r["scored"]]
+    missing = [r["rule"] for r in rules if r["status"] == "not enough data"]
     if level == LEVEL_LOW and missing:
         # No data is not "nothing changed": keep the resident on the list.
         level = LEVEL_NO_DATA
@@ -356,7 +404,7 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
         "score": score,
         "level": level,
         "rules": rules,
-        "experimental": [experimental_sway(recent, baseline)],
+        "experimental": [experimental_sway(recent, baseline), experimental_balance(recent, baseline)],
         "suggested_check": suggested_check(level, [r["rule"] for r in rules if r["contribution"] > 0], missing),
         "briefing": "",
         "as_of": as_of.isoformat(),
@@ -369,7 +417,7 @@ def score_resident(resident_id: str, display_name: str, days: Iterable[DayMetric
             "days_present": len(present),
             "days_expected": WINDOW_DAYS + BASELINE_DAYS,
             "wear_hours": round(sum(d.wear_hours for d in present), 1),
-            "all_rules_scored": all(r["scored"] for r in rules),
+            "all_rules_scored": all(r["status"] != "not enough data" for r in rules),
         },
         "limits": ["Heart rate alone cannot show blood pressure.",
                    "A change from their usual is a reason to look, not a finding."],
@@ -391,11 +439,13 @@ class Script:
     moves: tuple[str, ...] = ()          # rules this script is written to move
     onset: int = 0                       # first changed day (0-based index); linear ramp from there
     sway_per_day: float = 0.0            # per day, as a fraction of the resident's usual
-    settle_per_day: float = 0.0
     night_onset: int = 0                 # first changed night (index of the day it ends on)
     night_per_day: float = 0.0
+    hr_onset: int = 0                    # first day with the heart-rate-after-standing shift
+    hr_shift_bpm: float = 0.0            # added to the usual heart-rate change after standing
     bad_night_day: Optional[int] = None  # one night at 3x usual movement, the next day a little tired
     high_usual: bool = False             # usual values far above the other residents', all steady
+    hr_rule_off: Optional[str] = None    # synthetic record note that switches the heart-rate rule off
 
 
 SCRIPTS: dict[str, Script] = {s.name: s for s in (
@@ -405,35 +455,38 @@ SCRIPTS: dict[str, Script] = {s.name: s for s in (
            onset=21, sway_per_day=0.05),
     Script("sway_drift_steep", "Standing sway rises 7% of usual a day from day 21 (shown, not scored).", False,
            onset=20, sway_per_day=0.07),
-    # Changes start after the warm-up and late in the record: a rolling baseline absorbs a slow
-    # drift that has been going on for most of its 14 days (research 1.3).
-    Script("slower_settle", "Settling after standing up slows 8% of usual a day from day 22.", True, (SETTLE,),
-           onset=21, settle_per_day=0.08),
-    Script("slower_settle_steep", "Settling after standing up slows 9% of usual a day from day 22.", True,
-           (SETTLE,), onset=21, settle_per_day=0.09),
-    # Night changes start on the last 2 nights, so the rolling baseline (and its SD) stays clean.
+    # Changes start after the warm-up, on the last 2 days: a rolling baseline (and its SD) absorbs a
+    # change that has been going on for much of its 14 days (research 1.3).
+    Script("hr_response_flatter", "Heart rate rises about 12 bpm less than usual after standing on the last "
+           "2 days.", True, (STAND_HR,), hr_onset=26, hr_shift_bpm=-12.0),
+    Script("hr_response_bigger", "Heart rate rises about 14 bpm more than usual after standing on the last "
+           "2 days.", True, (STAND_HR,), hr_onset=26, hr_shift_bpm=14.0),
     Script("night_restless", "Night-time movement up on the last 2 nights (1.9x, then 2.8x usual).", True,
            (NIGHT,), night_onset=26, night_per_day=0.90),
-    Script("clustered", "Sway and settling time rise gradually from day 22; night-time movement up on the "
-           "last 2 nights.", True, (SETTLE, NIGHT), onset=21, sway_per_day=0.05, settle_per_day=0.08,
-           night_onset=26, night_per_day=0.85),
+    Script("clustered", "Sway rises gradually from day 22; on the last 2 days heart rate rises about 12 bpm "
+           "less after standing and night-time movement is up.", True, (STAND_HR, NIGHT), onset=21,
+           sway_per_day=0.05, hr_onset=26, hr_shift_bpm=-12.0, night_onset=26, night_per_day=0.85),
     Script("clustered_mild", "Sway rises gradually from day 22; night-time movement up on the last 2 nights.",
            True, (NIGHT,), onset=21, sway_per_day=0.045, night_onset=26, night_per_day=0.80),
+    Script("hr_rule_off_pacemaker", "Synthetic record notes a pacemaker; heart rate after standing changes on "
+           "the last 2 days, and the rule is off for them.", False, hr_onset=26, hr_shift_bpm=-12.0,
+           hr_rule_off="pacemaker"),
     Script("one_off_bad_night", "One bad night before day 27 (3x usual movement), then back to usual.", False,
            bad_night_day=26),
     Script("one_off_bad_night_last", "One bad night before day 28 (3x usual movement).", False,
            bad_night_day=27),
-    Script("high_usual", "Naturally high sway, slow settling and restless nights; all steady.", False,
+    Script("high_usual", "Naturally high sway, slow balance settling, a big heart-rate rise on standing and "
+           "restless nights; all steady.", False,
            high_usual=True),
 )}
 
 # Fixed assignment, mixed so the flagged residents are not grouped together.
 COHORT: tuple[tuple[str, str], ...] = (
     ("R-01", "stable"), ("R-02", "sway_drift"), ("R-03", "stable"), ("R-04", "one_off_bad_night"),
-    ("R-05", "slower_settle"), ("R-06", "stable"), ("R-07", "high_usual"), ("R-08", "clustered"),
+    ("R-05", "hr_response_flatter"), ("R-06", "stable"), ("R-07", "high_usual"), ("R-08", "clustered"),
     ("R-09", "stable"), ("R-10", "night_restless"), ("R-11", "stable"), ("R-12", "sway_drift_steep"),
-    ("R-13", "one_off_bad_night_last"), ("R-14", "stable"), ("R-15", "slower_settle_steep"),
-    ("R-16", "high_usual"), ("R-17", "stable"), ("R-18", "clustered_mild"), ("R-19", "stable"),
+    ("R-13", "one_off_bad_night_last"), ("R-14", "stable"), ("R-15", "hr_response_bigger"),
+    ("R-16", "high_usual"), ("R-17", "hr_rule_off_pacemaker"), ("R-18", "clustered_mild"), ("R-19", "stable"),
     ("R-20", "stable"),
 )
 assert len(COHORT) == RESIDENT_COUNT
@@ -445,11 +498,17 @@ class SyntheticResident:
     display_name: str
     script: Script
     days: tuple[DayMetrics, ...]
+    record: dict = None                  # synthetic record context the rules may read (not the script)
+
+
+def _bounded(rng: random.Random, sd: float) -> float:
+    """Gaussian noise bounded at 2.5 standard deviations."""
+    return max(-2.5 * sd, min(2.5 * sd, rng.gauss(0.0, sd)))
 
 
 def _jitter(rng: random.Random, sd: float) -> float:
     """Multiplicative day-to-day variation, bounded at 2.5 standard deviations."""
-    return 1.0 + max(-2.5 * sd, min(2.5 * sd, rng.gauss(0.0, sd)))
+    return 1.0 + _bounded(rng, sd)
 
 
 def default_end_day() -> date:
@@ -461,39 +520,44 @@ def generate_resident(resident_id: str, script: Script, seed: int, end_day: date
                       n_days: int = RECORD_DAYS) -> SyntheticResident:
     rng = random.Random(f"stillhere-care:{seed}:{resident_id}")
     if script.high_usual:
-        sway0, sway_settle0, hr_settle0 = rng.uniform(0.13, 0.15), rng.uniform(34, 40), rng.uniform(38, 46)
+        sway0, sway_settle0, hr_rise0 = rng.uniform(0.13, 0.15), rng.uniform(34, 40), rng.uniform(36, 42)
         night0 = rng.uniform(100, 120)
     else:
-        sway0, sway_settle0, hr_settle0 = rng.uniform(0.05, 0.09), rng.uniform(14, 22), rng.uniform(16, 26)
+        sway0, sway_settle0, hr_rise0 = rng.uniform(0.05, 0.09), rng.uniform(14, 22), rng.uniform(8, 16)
         night0 = rng.uniform(40, 60)
-    stand0, wear0 = rng.uniform(10, 18), rng.uniform(13.5, 15.5)
+    stand0, wear0 = rng.uniform(12, 18), rng.uniform(13.5, 15.5)
+    hr_share = rng.uniform(0.75, 0.95)     # share of stand-ups with heart rate (watch workout running)
+    night_sd = 0.05 if script.high_usual else 0.08   # "all steady": high-usual residents vary less
     start = end_day - timedelta(days=n_days - 1)
     rows = []
     for i in range(n_days):
         ramp = max(0, i - script.onset + 1)
         sway_m = 1.0 + script.sway_per_day * ramp
-        settle_m = 1.0 + script.settle_per_day * ramp
         night_m = 1.0 + script.night_per_day * max(0, i - script.night_onset + 1)
+        hr_shift = script.hr_shift_bpm if (script.hr_shift_bpm and i >= script.hr_onset) else 0.0
         if script.bad_night_day == i:
             night_m *= 3.0
             sway_m *= 1.05
-            settle_m *= 1.10
         n = max(0, round(stand0 * _jitter(rng, 0.12)))
-        balance = [sway_settle0 * settle_m * rng.lognormvariate(0.0, 0.12) for _ in range(n)]
-        heart = [hr_settle0 * settle_m * rng.lognormvariate(0.0, 0.15) for _ in range(n)]
-        both = [max(a, h) for a, h in zip(balance, heart)]
+        balance = [sway_settle0 * (1.0 + (sway_m - 1.0) / 2) * rng.lognormvariate(0.0, 0.12) for _ in range(n)]
+        # Heart-rate change after each stand-up that had heart rate: the day's level plus per-stand noise.
+        day_rise = hr_rise0 + hr_shift + _bounded(rng, 1.0)
+        rises = [day_rise + _bounded(rng, 3.0) for _ in range(n) if rng.random() < hr_share]
         rows.append(DayMetrics(
             day=start + timedelta(days=i),
             wear_hours=round(min(24.0, max(0.0, wear0 + rng.gauss(0.0, 0.8))), 1),
             sway_rms=round(sway0 * sway_m * _jitter(rng, 0.035), 4),
             stand_ups=n,
-            settle_s=round(statistics.median(both), 1) if n else None,
+            settle_s=None,
             settle_sway_s=round(statistics.median(balance), 1) if n else None,
-            settle_hr_s=round(statistics.median(heart), 1) if n else None,
-            night_restless_min=round(night0 * night_m * _jitter(rng, 0.08), 1),
+            settle_hr_s=None,
+            night_restless_min=round(night0 * night_m * _jitter(rng, night_sd), 1),
             night_wear_min=round(min(420.0, rng.gauss(405.0, 8.0)), 1),
+            stand_hr_n=len(rises),
+            stand_hr_delta_bpm=round(statistics.median(rises), 1) if rises else None,
         ))
-    return SyntheticResident(resident_id, f"Synthetic resident {resident_id}", script, tuple(rows))
+    record = {"hr_rule_off": script.hr_rule_off}
+    return SyntheticResident(resident_id, f"Synthetic resident {resident_id}", script, tuple(rows), record)
 
 
 def generate_cohort(seed: int = DEFAULT_SEED, end_day: Optional[date] = None) -> list[SyntheticResident]:
@@ -502,19 +566,21 @@ def generate_cohort(seed: int = DEFAULT_SEED, end_day: Optional[date] = None) ->
 
 
 def score_cohort(cohort: Sequence[SyntheticResident], as_of: date) -> list[dict]:
-    return [score_resident(r.id, r.display_name, r.days, as_of) for r in cohort]
+    return [score_resident(r.id, r.display_name, r.days, as_of, record=r.record) for r in cohort]
 
 
 # --- database ---------------------------------------------------------------------------
 METRIC_COLUMNS = ("resident_id", "day", "synthetic", "wear_hours", "sway_rms", "stand_ups", "settle_s",
-                  "settle_sway_s", "settle_hr_s", "night_restless_min", "night_wear_min")
+                  "settle_sway_s", "settle_hr_s", "night_restless_min", "night_wear_min", "stand_hr_n",
+                  "stand_hr_delta_bpm")
 
 
 def _day_from_row(row: dict) -> DayMetrics:
     return DayMetrics(day=row["day"], wear_hours=row["wear_hours"], sway_rms=row["sway_rms"],
                       stand_ups=row["stand_ups"], settle_s=row["settle_s"], settle_sway_s=row["settle_sway_s"],
                       settle_hr_s=row["settle_hr_s"], night_restless_min=row["night_restless_min"],
-                      night_wear_min=row["night_wear_min"], synthetic=row["synthetic"])
+                      night_wear_min=row["night_wear_min"], stand_hr_n=row["stand_hr_n"],
+                      stand_hr_delta_bpm=row["stand_hr_delta_bpm"], synthetic=row["synthetic"])
 
 
 async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
@@ -527,14 +593,15 @@ async def evaluate(conn, as_of: Optional[date] = None) -> list[dict]:
         if as_of is None:
             return []
     residents = await (await conn.execute(
-        "SELECT id, display_name FROM care_residents ORDER BY id")).fetchall()
+        "SELECT id, display_name, hr_rule_off FROM care_residents ORDER BY id")).fetchall()
     rows = await (await conn.execute(
         """SELECT * FROM care_daily_metrics WHERE day BETWEEN %s AND %s ORDER BY resident_id, day""",
         (as_of - timedelta(days=RECORD_DAYS - 1), as_of))).fetchall()
     by_resident: dict[str, list[DayMetrics]] = {}
     for row in rows:
         by_resident.setdefault(row["resident_id"], []).append(_day_from_row(row))
-    cards = [score_resident(r["id"], r["display_name"], by_resident.get(r["id"], []), as_of) for r in residents]
+    cards = [score_resident(r["id"], r["display_name"], by_resident.get(r["id"], []), as_of,
+                            record={"hr_rule_off": r["hr_rule_off"]}) for r in residents]
     async with conn.transaction():
         for card in cards:
             await conn.execute(
@@ -554,15 +621,17 @@ async def seed_synthetic(conn, *, seed: int = DEFAULT_SEED, end_day: Optional[da
         await conn.execute("DELETE FROM care_residents")
         async with conn.cursor() as cur:
             await cur.executemany(
-                """INSERT INTO care_residents (id, display_name, synthetic, script, script_note, expect_flag)
-                   VALUES (%s, %s, true, %s, %s, %s)""",
-                [(r.id, r.display_name, r.script.name, r.script.note, r.script.expect_flag) for r in cohort])
+                """INSERT INTO care_residents (id, display_name, synthetic, script, script_note, expect_flag,
+                                              hr_rule_off)
+                   VALUES (%s, %s, true, %s, %s, %s, %s)""",
+                [(r.id, r.display_name, r.script.name, r.script.note, r.script.expect_flag,
+                  r.record.get("hr_rule_off")) for r in cohort])
             async with cur.copy(f"COPY care_daily_metrics ({', '.join(METRIC_COLUMNS)}) FROM STDIN") as copy:
                 for r in cohort:
                     for d in r.days:
                         await copy.write_row((r.id, d.day, True, d.wear_hours, d.sway_rms, d.stand_ups, d.settle_s,
                                               d.settle_sway_s, d.settle_hr_s, d.night_restless_min,
-                                              d.night_wear_min))
+                                              d.night_wear_min, d.stand_hr_n, d.stand_hr_delta_bpm))
         cards = await evaluate(conn, end_day)
     flagged = {c["resident_id"] for c in cards if c["level"] in FLAGGED}
     changes = [r.id for r in cohort if r.script.expect_flag]

@@ -34,7 +34,7 @@ PATTERN = re.compile("|".join(BANNED + CARE_BLOCKLIST), re.IGNORECASE)
 
 BACKEND = Path(__file__).resolve().parent.parent
 CARE_SOURCES = [BACKEND / "app" / "care.py", BACKEND / "app" / "routes" / "care.py",
-                BACKEND / "migrations" / "003_care.sql"]
+                *sorted((BACKEND / "migrations").glob("*care*.sql"))]
 
 
 def hits(text: str) -> list[str]:
@@ -71,8 +71,7 @@ def test_not_enough_data_and_minimum_change_texts_are_clean():
 
     from tests.test_care_rules import END, flat_days
     sparse = [d for d in flat_days() if d.day != END]
-    small = [replace(d, settle_s=10.0) for d in flat_days()]
-    small[-2:] = [replace(d, settle_s=14.0) for d in small[-2:]]       # +40% but under the 5 s minimum
+    small = flat_days(stand_hr_n=1)                                    # too few stands with heart rate
     one_night = flat_days()
     one_night[-1] = replace(one_night[-1], night_restless_min=90.0)
     for days in (sparse, small, one_night):
