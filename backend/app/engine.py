@@ -397,7 +397,7 @@ async def maybe_pull_forward(conn, session_id, pf: PullForward, *, actor: str, e
     applied = await apply(conn, session_id,
                           Event(states.PULL_FORWARD, reason=pf.reason, level=pf.level, simulated=pf.simulated),
                           actor=actor, event_key=event_key, ctx=ctx)
-    if applied.decision.changed:
+    if applied.decision.public_changed:  # the prompt she sees moved (a masked session's cover too)
         await conn.execute(
             """UPDATE sessions SET pull_forward_last = pull_forward_last || jsonb_build_object(%s::text, now())
                 WHERE id = %s""", (pf.reason, session_id))

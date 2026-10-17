@@ -81,7 +81,7 @@ async def evaluate_hr(db, ctx: Ctx, force: bool = False) -> int:
     async with db.connection() as conn:
         src = await get_hr_source(conn)
         rows = await (await conn.execute(
-            """SELECT s.id, s.user_id, s.state, s.profile, s.hr_deviating_since, s.pull_forward_last,
+            """SELECT s.id, s.user_id, s.state, s.public_state, s.profile, s.hr_deviating_since, s.pull_forward_last,
                       s.created_at, b.value AS baseline,
                       d.last_enmo60_mg, d.lease_expires_at, d.last_vigorous_at
                  FROM sessions s
@@ -116,13 +116,15 @@ async def evaluate_hr(db, ctx: Ctx, force: bool = False) -> int:
                 if res.deviating_since != r["hr_deviating_since"]:
                     await conn.execute("UPDATE sessions SET hr_deviating_since = %s WHERE id = %s",
                                        (res.deviating_since, r["id"]))
-                if res.pull_forward is not None and r["state"] == states.ARMED:
+                # The public state: a masked duress session answers like the ARMED twin it shows.
+                armed = r["public_state"] == states.ARMED
+                if res.pull_forward is not None and armed:
                     a = await engine.maybe_pull_forward(conn, r["id"], res.pull_forward, actor="rule:hr",
                                                         event_key=f"hr:{sid}:{now.isoformat()}", ctx=ctx)
                     if a is not None and a.decision.changed:
                         applied_n += 1
                 pfl = r["pull_forward_last"] or {}
-                lost = rules.hr_lost_rule(now=now, armed=r["state"] == states.ARMED, last_sample_at=last,
+                lost = rules.hr_lost_rule(now=now, armed=armed, last_sample_at=last,
                                           lost_after_s=t.hr_lost_s,
                                           already_fired_for=_parse(pfl.get("hr_signal_lost_for")))
                 if lost is not None:

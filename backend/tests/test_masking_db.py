@@ -139,3 +139,57 @@ async def test_masked_duress_still_asks_home_safe_at_the_preset_end(client, db, 
     assert (await wearer_texts(db, real))[-1] == "Home safe?"
     assert await wearer_texts(db, real) == await wearer_texts(db, duress)
     assert await device_view(client, real) == await device_view(client, duress)
+
+
+def _norm_reply(r):
+    body = r.json()
+    if body.get("cmd"):
+        body["cmd"] = {**body["cmd"], "challenge_id": bool(body["cmd"]["challenge_id"])}
+    return r.status_code, body
+
+
+@pytest.mark.parametrize("kind", ["head_position_change", "offbody", "fall_like"])
+async def test_sensor_events_during_masked_duress_prompt_like_armed(client, db, ctx, first_choice, kind):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress)
+    replies = []
+    for w in (real, duress):
+        r = await client.post("/v1/device/events", headers=w.device(),
+                              json={"event_id": "b1:500", "type": kind, "payload": {}})
+        replies.append(_norm_reply(r))
+    assert replies[0][1]["result"] == "prompted" and replies[0][1]["state_public"] == states.PROMPTED
+    assert replies[0] == replies[1]
+    assert await wearer_texts(db, real) == await wearer_texts(db, duress)
+    assert await device_view(client, real) == await device_view(client, duress)
+    assert await visible(client, real) == await visible(client, duress)
+    # The second event is in cooldown for both.
+    again = [_norm_reply(await client.post("/v1/device/events", headers=w.device(),
+                                           json={"event_id": "b1:501", "type": kind, "payload": {}}))
+             for w in (real, duress)]
+    assert again[0] == again[1]
+
+
+async def test_heart_rate_rule_during_masked_duress_prompts_like_armed(client, db, ctx, first_choice):
+    from app import sensors
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress)
+    async with db.connection() as conn:
+        for w in (real, duress):
+            await conn.execute("INSERT INTO user_baselines (user_id, kind, value) VALUES (%s, 'hr_rest', 60)",
+                               (w.user_id,))
+            await conn.execute(
+                """INSERT INTO hr_samples (time, user_id, source, bpm)
+                   SELECT now() - make_interval(secs => s), %s, 'test', 120 FROM generate_series(0, 50, 5) s""",
+                (w.user_id,))
+    for w in (real, duress):
+        await client.post("/v1/device/heartbeat", headers=w.device(), json={"enmo60_mg": 5})
+    await sensors.evaluate_hr(db, ctx, force=True)
+    async with db.connection() as conn:
+        for w in (real, duress):
+            await conn.execute("UPDATE sessions SET hr_deviating_since = now() - interval '600 seconds' WHERE id = %s",
+                               (w.session_id,))
+    await sensors.evaluate_hr(db, ctx, force=True)
+    assert (await device_view(client, real))[0] == states.PROMPTED
+    assert await device_view(client, real) == await device_view(client, duress)
+    assert await wearer_texts(db, real) == await wearer_texts(db, duress)
+    assert (await session_row(db, duress.session_id))["state"].startswith("ESCALATED_")

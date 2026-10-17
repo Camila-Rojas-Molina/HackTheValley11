@@ -369,3 +369,12 @@ def test_masked_duress_session_end_asks_home_safe():
     d = decide(masked_duress(), Event(states.SESSION_END_DUE), first)
     assert d.public_state == PROMPTED and d.wearer_templates == ["home_safe"]
     assert d.to_state == "ESCALATED_L1"
+
+
+def test_masked_duress_sensor_input_prompts_the_cover_only():
+    s = masked_duress()
+    ev = Event(states.PULL_FORWARD, reason="head_position_change", level="MED")
+    d, twin = decide(s, ev, first), decide(snap(ARMED), ev, first)
+    assert _wearer_view(d) == _wearer_view(twin)
+    assert d.to_state == s.state and not d.alert_ops and d.public_changed
+    assert [t.kind for t in d.timers] == [states.COVER_PROMPT_TIMEOUT]
