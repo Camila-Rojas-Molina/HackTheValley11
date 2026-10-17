@@ -129,9 +129,12 @@ Wearer (`Authorization: Bearer <wearer key>`):
 - `GET /v1/sessions/{id}`, `GET /v1/sessions/{id}/timeline` (duress entries hidden until resolved)
 - `POST /v1/sessions/{id}/checkin` `{lat, lon, accuracy_m}` ("I'm OK"; refreshes last-known location)
 - `POST /v1/sessions/{id}/cancel {pin}`, `POST /v1/sessions/{id}/end {pin}`: identical bytes for real and duress PINs
+- `POST /v1/sessions/{id}/arrived`: the "I'm home" tap, `walking_home` only; ends the session when no alert is
+  open, never stands an alert down. Presets: `night_out`, `date`, `walking_home`, `demo` (docs/API.md section 5)
 - `POST /v1/contacts {name}` → `{t_me_link, web_link, qr_png}` (single use, 10 min); `GET /v1/contacts`;
   `POST /v1/contacts/{id}/approve`; `DELETE /v1/contacts/{id}` (silent)
-- `GET /v1/me/export`, `DELETE /v1/me/data`, `POST /v1/me/telegram-link`
+- `GET /v1/me/export` (`?format=html`: printable, chain check per session), `POST /v1/sessions/{id}/pin`
+  (keep a timeline past 30 days), `DELETE /v1/me/data`, `POST /v1/me/telegram-link`
 
 Contact (capability token; cannot arm, see session status or ask for location):
 - `GET /c/{token}` page; `GET /v1/contact/{token}/invite` (consent screen: `{wearer, n}`, 410 once used or expired);

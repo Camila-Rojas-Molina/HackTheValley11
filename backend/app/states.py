@@ -82,6 +82,7 @@ END_DURESS = "END_DURESS"
 LEASE_EXPIRED = "LEASE_EXPIRED"
 LOST_CONTACT_NOTIFY = "LOST_CONTACT_NOTIFY"
 LINK_RESTORED = "LINK_RESTORED"
+ARRIVED = "ARRIVED"  # the wearer's "I'm home" tap (walking-home sessions)
 
 # Cover check-ins of a masked duress session (see "Masked duress" below): the
 # check-in schedule a twin session that used the real PIN would keep running.
@@ -109,14 +110,14 @@ ALL_EVENTS = (
     CHECKIN_DUE, PULL_FORWARD, SQUEEZE, WEARER_OK, PROMPT_TIMEOUT, REMINDER_TIMEOUT,
     ACK_TIMEOUT, RENOTIFY, FOLLOWUP_TIMEOUT, SESSION_END_DUE, CONTACT_ACK, CONTACT_PASS,
     CONTACT_SAFE, CONTACT_CANT_REACH, PIN_REAL, PIN_DURESS, END_REAL, END_DURESS,
-    LEASE_EXPIRED, LOST_CONTACT_NOTIFY, LINK_RESTORED,
+    LEASE_EXPIRED, LOST_CONTACT_NOTIFY, LINK_RESTORED, ARRIVED,
 ) + COVER_TIMER_KINDS
 SENSOR_EVENTS = frozenset({PULL_FORWARD})
 RESOLVING_EVENTS = frozenset({CONTACT_SAFE, PIN_REAL, END_REAL})
 # Wearer-facing events that a masked session answers through its twin.
 COVER_EVENTS = frozenset(COVER_TIMER_KINDS) | {SESSION_END_DUE, PULL_FORWARD, SQUEEZE, WEARER_OK,
                                                 PIN_REAL, PIN_DURESS, END_REAL, END_DURESS,
-                                                LEASE_EXPIRED, LINK_RESTORED}
+                                                LEASE_EXPIRED, LINK_RESTORED, ARRIVED}
 
 # Timers tied to the current state carry expected_version and are cancelled on
 # every transition. Independent timers survive transitions (cover timers are
@@ -628,6 +629,24 @@ def _on_wearer_ok(snap: Snapshot, d: Decision) -> None:
         _late_response(snap, d, "phone", False)
 
 
+def _on_arrived(snap: Snapshot, d: Decision) -> None:
+    """The "I'm home" tap. Not a PIN: it ends the session only when nothing is open. During an alert it
+    is a late response from her phone (only "she's safe" or the real PIN close an alert); with a
+    lost-contact notice out it counts as "I'm OK" and the session goes on until the link is back."""
+    s = snap.state
+    if is_alerting(s) or (s in PRE_ALERT and snap.alert is not None):
+        _on_wearer_ok(snap, d)
+        return
+    if s not in PRE_ALERT:
+        d.reply = "ignored"
+        return
+    d.audit.append(AuditEntry("arrived", {"via": "phone"}, masked=False, from_state=snap.public_state,
+                              to_state=ENDED))
+    _to_ended(d)
+    d.notify.append(Notify("wearer", "ended"))
+    d.reply = "ended"
+
+
 def _false_alarm_entry(snap: Snapshot, to_public: str) -> AuditEntry:
     # "through" is part of the entry itself, so the duress cover entry carries it too.
     return AuditEntry("false_alarm", {"by": "wearer_pin", "through": FALSE_ALARM}, masked=False,
@@ -1049,6 +1068,8 @@ def _dispatch(snap: Snapshot, ev: Event, d: Decision, choose: Chooser) -> None:
         _on_lost_contact_notify(snap, d)
     elif k == LINK_RESTORED:
         _on_link_restored(snap, d)
+    elif k == ARRIVED:
+        _on_arrived(snap, d)
     elif k in COVER_TIMER_KINDS:
         d.reply = "ignored"  # the twin answers these while a masked alert is open
     else:

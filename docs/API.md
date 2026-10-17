@@ -275,10 +275,10 @@ Arm a session.
 
 | Field | Values |
 |---|---|
-| `preset` | `night_out` (6 h), `walking_home` (45 min) or `demo` (no end); each ends with a "Home safe?" prompt |
+| `preset` | `night_out` (every 30 min, "Home safe?" after 6 h), `date` (every 45 min, no end time), `walking_home` (one check-in, "Home safe?", 20 min after arming; then every 20 min until her PIN or the arrival tap) or `demo` (no end). The cadences apply to the `real` profile; the `demo` profile keeps its compressed timing (`walking_home` asks "Home safe?" after one demo interval). A missed "Home safe?" escalates like any check-in. |
 | `mode` | `wrist` (default) or `hair` |
 | `profile` | `demo` (seconds) or `real` (minutes); default `STILLHERE_PROFILE` |
-| `interval_s` | 10–86400; default 60 s demo, 30 min real |
+| `interval_s` | 10–86400; default: the preset's cadence (real profile), else 60 s demo, 30 min real |
 | `duration_s` | 30–86400; overrides the preset's length |
 | `window_multiplier` | 1–10; stretches every response window |
 | `device_id` | one of the wearer's own devices (`404 {"detail":"no such device"}` otherwise); default: her first device |
@@ -338,6 +338,18 @@ Wrong PIN: `403 {"error":"wrong_pin","ok":false}`.
 Same rules as `cancel`. Reply `{"message":"Ended ✓","ok":true,"state_public":"ENDED"}` for both PINs. With
 the duress PIN the session only looks ended; its alert keeps escalating, and arming again starts a fresh
 session, exactly as after a real end.
+
+### `POST /v1/sessions/{session_id}/arrived`
+
+The "I'm home" tap, for `walking_home` sessions only (`409` for others: end those with the PIN). No body.
+
+- **Nothing open** (ARMED, or a prompt): the session ends. `{"message":"Ended ✓","ok":true,"state_public":"ENDED"}`;
+  a timeline entry `arrived` (`via: phone`). No contact is told.
+- **During an alert:** not a PIN, so the alert stays open; contacts get the "responded on her phone – please still
+  check on her" note, like a late "I'm OK". `{"message":"Noted ✓","ok":true,"state_public":"ESCALATED_L1"}`.
+- **A lost-contact notice is out:** counts as "I'm OK"; the session goes on until the link is back.
+- **After a duress PIN or squeeze:** answered by the twin, so the reply is byte-identical to the unmasked case
+  while the duress alert keeps escalating.
 
 ### `GET /v1/sessions/{session_id}/timeline`
 

@@ -61,11 +61,14 @@ PROFILES: dict[str, Timings] = {
     ),
 }
 
-# Session presets. Each ends with a "Home safe?" prompt at end time.
+# Session presets (BUILD_PLAN §7.1). A preset with an end time asks "Home safe?" then. interval_s is the
+# real profile's cadence; the demo profile keeps its compressed timing. walking_home has one check-in: the
+# "Home safe?" prompt one interval after arming (then every interval until her PIN or the "I'm home" tap).
 PRESETS: dict[str, dict] = {
-    "night_out": {"duration_s": 6 * 3600},
-    "walking_home": {"duration_s": 45 * 60},
-    "demo": {"duration_s": None},
+    "night_out": {"interval_s": 30 * 60, "duration_s": 6 * 3600},
+    "date": {"interval_s": 45 * 60, "duration_s": None},
+    "walking_home": {"interval_s": 20 * 60, "duration_s": None, "single_checkin": True},
+    "demo": {"interval_s": None, "duration_s": None},
 }
 
 

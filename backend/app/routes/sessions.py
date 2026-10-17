@@ -24,7 +24,7 @@ router = APIRouter(tags=["wearer"])
 
 
 class ArmIn(BaseModel):
-    preset: Optional[Literal["night_out", "walking_home", "demo"]] = None
+    preset: Optional[Literal["night_out", "date", "walking_home", "demo"]] = None
     mode: Literal["wrist", "hair"] = "wrist"
     profile: Optional[Literal["demo", "real"]] = None
     interval_s: Optional[int] = Field(default=None, ge=10, le=24 * 3600)
@@ -65,10 +65,14 @@ async def who_can_be_alerted(conn, user_id) -> list[dict]:
 async def arm_session(conn, ctx, user: dict, body: ArmIn, actor: str = "wearer") -> dict:
     profile = body.profile or ctx.settings.default_profile
     t = ctx.settings.timings(profile)
-    interval = body.interval_s or int(t.interval_s)
+    preset = PRESETS[body.preset] if body.preset else {}
+    # A preset's cadence is a real-world one; the demo profile keeps its compressed timing.
+    interval = body.interval_s or (preset.get("interval_s") if profile == "real" else None) or int(t.interval_s)
     duration = body.duration_s
-    if duration is None and body.preset:
-        duration = PRESETS[body.preset]["duration_s"]
+    if duration is None and preset:
+        # walking_home: its one check-in is the "Home safe?" prompt one interval after arming.
+        duration = interval if preset.get("single_checkin") else preset["duration_s"]
+    first_checkin = not (preset.get("single_checkin") and duration is not None and duration <= interval)
     # One arm at a time per wearer: two at once (a double tap) give one session and a 409, not a 500.
     await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"arm:{user['id']}",))
     device_id = body.device_id
@@ -96,9 +100,10 @@ async def arm_session(conn, ctx, user: dict, body: ArmIn, actor: str = "wearer")
            RETURNING *""",
         (user["id"], device_id, profile, body.mode, body.preset, interval, body.window_multiplier,
          duration, duration))).fetchone()
-    await conn.execute(
-        """INSERT INTO timers (session_id, kind, fire_at, expected_version)
-           VALUES (%s, 'CHECKIN_DUE', now() + make_interval(secs => %s), 0)""", (sess["id"], float(interval)))
+    if first_checkin:
+        await conn.execute(
+            """INSERT INTO timers (session_id, kind, fire_at, expected_version)
+               VALUES (%s, 'CHECKIN_DUE', now() + make_interval(secs => %s), 0)""", (sess["id"], float(interval)))
     if duration:
         await conn.execute(
             """INSERT INTO timers (session_id, kind, fire_at) VALUES (%s, 'SESSION_END_DUE', %s)""",
@@ -181,6 +186,24 @@ async def _pin_action(request: Request, session_id: str, body: PinIn, end: bool)
             applied = await engine.apply(conn, sess["id"], states.Event(ev), actor="wearer",
                                          event_key=f"web:{uuid.uuid4()}", ctx=ctx)
     message = messages.ENDED if end else messages.CANCELLED
+    return canonical_json({"ok": True, "message": message, "state_public": applied.public_state})
+
+
+@router.post("/v1/sessions/{session_id}/arrived")
+async def arrived(request: Request, session_id: str):
+    """The "I'm home" tap of a walking-home session. Ends it when no alert is open; during an alert it is a
+    late response and the alert stays open. A masked session answers through its twin, so the reply is
+    the same bytes as for an unmasked one."""
+    db, ctx = get_db(request), get_ctx(request)
+    async with db.connection() as conn:
+        async with conn.transaction():
+            user = await require_wearer(request, conn)
+            sess = await _own_session(conn, user, session_id)
+            if sess["preset"] != "walking_home":
+                raise HTTPException(409, "the arrival tap ends walking-home sessions only; end others with the PIN")
+            applied = await engine.apply(conn, sess["id"], states.Event(states.ARRIVED), actor="wearer",
+                                         event_key=f"web:{uuid.uuid4()}", ctx=ctx)
+    message = messages.ENDED if applied.public_state == states.ENDED else messages.NOTED
     return canonical_json({"ok": True, "message": message, "state_public": applied.public_state})
 
 
