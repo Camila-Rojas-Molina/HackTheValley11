@@ -128,6 +128,7 @@ async def test_stored_cards_match_the_pure_engine(client):
     assert {c.pop("briefing_source") for c in served.values()} == {"template"}
     for c in served.values():
         assert c.pop("delivery")["channel"] in ("push", "digest", None)
+        c.pop("query_ms"), c.pop("series")                     # read-time fields (research 4.1)
     for c in expected.values():
         assert c.pop("delivery") is None
     assert served == expected
@@ -283,3 +284,21 @@ async def test_snooze_button_moves_the_next_card_to_the_digest(client, db):
     cards = {c["resident_id"]: c for c in (await client.get("/v1/care/alerts")).json()["alerts"]}
     assert cards["R-10"]["delivery"]["channel"] == "digest"
     assert cards["R-10"]["delivery"]["reason"].startswith("snoozed until ")
+
+
+# --- research 4.1 (Tiger Data): query time in ms next to each card -----------------------------------
+async def test_each_card_shows_its_own_query_time_and_series(client):
+    await seed(client)
+    body = (await client.get("/v1/care/alerts?include_low=true")).json()
+    assert body["timing"]["unit"] == "ms" and body["timing"]["list_query_ms"] >= 0
+    assert "server-side" in body["timing"]["note"]
+    for c in body["alerts"]:
+        assert isinstance(c["query_ms"], float) and 0 <= c["query_ms"] < 5000, c["query_ms"]
+        series = c["series"]
+        assert len(series["days"]) == 28 and series["days"][-1] == END.isoformat()
+        assert len(series["night_restless_min"]) == 28 and len(series["stand_hr_delta_bpm"]) == 28
+    # The timings are read-time fields: the stored card does not change.
+    async with client._transport.app.state.db.connection() as conn:
+        stored = (await (await conn.execute(
+            "SELECT card FROM care_alerts WHERE resident_id = 'R-08' ORDER BY as_of DESC LIMIT 1")).fetchone())["card"]
+    assert "query_ms" not in stored and "series" not in stored

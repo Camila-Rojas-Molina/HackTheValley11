@@ -4,7 +4,9 @@ GET  /v1/care/residents   every synthetic resident with their latest score and l
                           generator's script (ground truth for checking the rules; never read by them)
 GET  /v1/care/alerts      latest alert cards at level "worth a look this shift" or "review this shift":
                           "review this shift" first, then by score
-                          (?include_low=true returns every resident's card)
+                          (?include_low=true returns every resident's card). Each card carries its
+                          28-day series and query_ms, the server-side time of its own query (research
+                          4.1); timing.list_query_ms times the card list.
                           Each flagged card's briefing is worded by Vultr Serverless
                           Inference when VULTR_API_KEY is set (app/vultr.py); briefing_source says
                           which text is shown: "vultr", or "template" (care.local_briefing).

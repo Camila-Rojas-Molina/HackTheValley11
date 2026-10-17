@@ -85,7 +85,7 @@ async def test_vultr_words_only_the_briefing_of_flagged_cards(client, db, monkey
         assert c["briefing"] == f"{c['display_name']} (SYNTHETIC): {TEXT}"
         before = stored[c["resident_id"]]
         # The rule engine's decision is untouched: everything but the briefing is the stored card.
-        assert {k: v for k, v in c.items() if k not in ("briefing", "briefing_source")} == \
+        assert {k: v for k, v in c.items() if k not in ("briefing", "briefing_source", "query_ms", "series")} == \
                {k: v for k, v in before.items() if k != "briefing"}
     # Only rule findings left the server: no names, no resident ids.
     sent = json.dumps(fake.bodies)

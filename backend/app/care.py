@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import random
 import statistics
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Iterable, Optional, Sequence
@@ -886,10 +887,17 @@ async def list_alerts(conn, include_low: bool = False) -> dict:
         q += " AND level <> 'low'"
     order = (" ORDER BY CASE level WHEN 'review this shift' THEN 0 WHEN 'worth a look this shift' THEN 1"
              " WHEN 'not enough data' THEN 2 ELSE 3 END, score DESC, resident_id")
+    t0 = time.perf_counter()
     rows = await (await conn.execute(q + order)).fetchall()
+    list_ms = (time.perf_counter() - t0) * 1000.0
     cards = [r["card"] for r in rows]
+    for card in cards:
+        await _with_series(conn, card)
     out = {"synthetic": True, "notice": NOTICE, "thresholds_status": ASSUMPTION,
-           "as_of": cards[0]["as_of"] if cards else None, "alerts": cards}
+           "as_of": cards[0]["as_of"] if cards else None, "alerts": cards,
+           "timing": {"unit": "ms", "list_query_ms": round(list_ms, 2),
+                      "note": ("server-side time of each database query: list_query_ms for the card list, each "
+                               "card's query_ms for its own 28-day series")}}
     if not cards:
         latest = await (await conn.execute("SELECT max(as_of) AS d FROM care_alerts")).fetchone()
         if latest["d"] is None:
@@ -897,6 +905,23 @@ async def list_alerts(conn, include_low: bool = False) -> dict:
         else:
             out["as_of"] = latest["d"].isoformat()
     return out
+
+
+SERIES_SQL = """SELECT day, night_restless_min, stand_hr_delta_bpm, wear_hours FROM care_daily_metrics
+                 WHERE resident_id = %s AND day > %s::date - %s AND day <= %s::date ORDER BY day"""
+
+
+async def _with_series(conn, card: dict) -> None:
+    """Add the card's 28-day series (for the usual-vs-now sparkline) and the time its query took
+    (research 4.1: query time in ms next to each card). Read-time fields; the stored card is unchanged."""
+    as_of = date.fromisoformat(card["as_of"])
+    t0 = time.perf_counter()
+    rows = await (await conn.execute(SERIES_SQL, (card["resident_id"], as_of, RECORD_DAYS, as_of))).fetchall()
+    card["query_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+    card["series"] = {"days": [r["day"].isoformat() for r in rows],
+                      "night_restless_min": [r["night_restless_min"] for r in rows],
+                      "stand_hr_delta_bpm": [r["stand_hr_delta_bpm"] for r in rows],
+                      "wear_hours": [r["wear_hours"] for r in rows]}
 
 
 async def record_feedback(conn, resident_id: str, action: str, reason: Optional[str] = None) -> Optional[dict]:

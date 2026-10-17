@@ -667,6 +667,8 @@ The latest cards at `watch`, `check today` or `not enough data`: `check today` f
 | `suggested_check` | what a care aide does next |
 | `briefing` | plain-language summary of the card |
 | `briefing_source` | `vultr` when Vultr Serverless Inference worded the briefing, else `template` |
+| `query_ms` | server-side time of this card's own database query (its 28-day `series`), in ms; the response's `timing.list_query_ms` times the card list |
+| `series` | the resident's last 28 days: `days`, `night_restless_min`, `stand_hr_delta_bpm`, `wear_hours` (usual vs now) |
 
 The rules: `postural_sway_drift` (quiet-standing sway), `rise_to_settle_time` (time after standing up until
 balance and heart rate have both settled) and `night_restlessness` (both of the last 2 nights above their

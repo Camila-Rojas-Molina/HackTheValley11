@@ -92,7 +92,8 @@ def test_care_uses_no_network_client_or_model():
     The route reaches a model only through app.vultr, for the briefing text."""
     assert not app_closure(["app.care"]) - {"app", "app.care"}
     externals = {m.split(".")[0] for m in imports_of("app.care") if not m.startswith("app")}
-    assert externals <= {"__future__", "random", "statistics", "dataclasses", "datetime", "typing", "psycopg"}, \
+    assert externals <= {"__future__", "random", "statistics", "time", "dataclasses", "datetime", "typing",
+                         "psycopg"}, \
         externals
     route_externals = {m.split(".")[0] for m in imports_of("app.routes.care") if not m.startswith("app")}
     assert route_externals <= {"__future__", "asyncio", "datetime", "typing", "fastapi", "pydantic"}, \
