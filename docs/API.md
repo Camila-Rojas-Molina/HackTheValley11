@@ -452,7 +452,9 @@ During an alert this contact was told about:
 ### `GET /l/{share_token}`
 
 Last-known location released with an alert (the token is in `location.link`). Coordinates are stored
-encrypted.
+encrypted (AES-GCM) with a key derived from `APP_SECRET`. If `APP_SECRET` is unset, a random secret is kept
+in the database itself, so anyone holding the database can read the coordinates and sign links: set
+`APP_SECRET` whenever the database is not on this machine (the server logs a warning otherwise).
 
 ```json
 {"lat": 43.7845, "lon": -79.1867, "accuracy_m": 25.0, "simulated": false, "as_of": "03:33", "age_min": 0,
@@ -462,6 +464,7 @@ encrypted.
 
 - `expires_at` is null while the alert is open.
 - After expiry: `410 {"error": "gone", "detail": "This location link has expired."}`.
+- Sealed under an earlier `APP_SECRET`: `410 {"error": "gone", "detail": "This location is no longer available."}`.
 - Unknown token: `404`.
 
 ## 7. Operator and demo

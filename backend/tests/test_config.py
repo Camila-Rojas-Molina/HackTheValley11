@@ -53,3 +53,36 @@ def test_access_log_lines_never_carry_capability_tokens(caplog, settings):
     text = caplog.text
     assert not any(s in text for s in secrets_), text
     assert "/v1/contact/***/status" in text and "/l/***" in text and "/v1/health" in text
+
+
+async def test_location_link_sealed_under_an_older_secret_answers_410_not_500(client, db, ctx):
+    from app.security import encrypt_coords, new_token, sha256_hex
+    w = await make_world_for_secret(client, db)
+    token = new_token()
+    async with db.connection() as conn:
+        snap = await (await conn.execute(
+            """INSERT INTO location_snapshots (user_id, coords_enc, source) VALUES (%s, %s, 'browser') RETURNING id""",
+            (w.user_id, encrypt_coords("an-older-app-secret", 43.7, -79.4)))).fetchone()
+        await conn.execute("INSERT INTO location_shares (token_hash, token_nonce, snapshot_id) VALUES (%s, 'n', %s)",
+                           (sha256_hex(token), snap["id"]))
+    r = await client.get(f"/l/{token}")
+    assert r.status_code == 410 and "no longer available" in r.json()["detail"]
+
+
+async def make_world_for_secret(client, db):
+    from tests.conftest import make_world
+    return await make_world(client, db, contacts=0, arm=False)
+
+
+async def test_unset_app_secret_with_a_remote_database_logs_a_warning(caplog, db):
+    import logging
+
+    from app import engine
+    remote = Settings(database_url="postgresql://u@db.example.tsdb.cloud.timescale.com:31234/tsdb?sslmode=require")
+    local = Settings(database_url="postgresql://postgres@localhost:5432/stillhere")
+    async with db.connection() as conn:
+        with caplog.at_level(logging.WARNING, logger="stillhere.engine"):
+            await engine.load_secret(conn, local)
+            assert "APP_SECRET" not in caplog.text
+            await engine.load_secret(conn, remote)
+    assert "APP_SECRET is not set" in caplog.text

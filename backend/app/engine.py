@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from psycopg.conninfo import conninfo_to_dict
+
 from . import audit, messages, states
 from .config import Settings
 from .rules import PullForward, cooldown_ok
@@ -61,10 +63,23 @@ async def db_now(conn) -> datetime:
     return (await (await conn.execute("SELECT now() AS now")).fetchone())["now"]
 
 
+def _local_database(url: str) -> bool:
+    try:
+        host = conninfo_to_dict(url).get("host") or ""
+    except Exception:
+        return False
+    return all(h in ("", "localhost", "127.0.0.1", "::1") or h.startswith("/") for h in host.split(","))
+
+
 async def load_secret(conn, settings: Settings) -> str:
     """APP_SECRET from the environment, else a random one persisted in bot_state."""
     if settings.app_secret:
         return settings.app_secret
+    if not _local_database(settings.database_url):
+        # The key that seals coordinates and signs contact/location links would then sit in the
+        # same remote database as what it protects: anyone with the database could read both.
+        log.warning("APP_SECRET is not set: the coordinate key and link signing secret are kept in the "
+                    "remote database itself. Set APP_SECRET for a database that is not on this machine.")
     await conn.execute(
         """INSERT INTO bot_state (key, value) VALUES ('app_secret', to_jsonb(%s::text))
            ON CONFLICT (key) DO NOTHING""", (secrets.token_urlsafe(32),))

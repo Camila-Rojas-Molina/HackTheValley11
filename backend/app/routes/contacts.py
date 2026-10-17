@@ -25,6 +25,7 @@ from typing import Literal, Optional
 
 import qrcode
 import qrcode.image.pure
+from cryptography.exceptions import InvalidTag
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -324,7 +325,11 @@ async def location_share(request: Request, share_token: str):
     if row["expired"]:
         return JSONResponse({"error": "gone", "detail": "This location link has expired."}, status_code=410,
                             headers={"Cache-Control": "no-store"})
-    coords = decrypt_coords(ctx.secret, row["coords_enc"])
+    try:
+        coords = decrypt_coords(ctx.secret, row["coords_enc"])
+    except InvalidTag:  # sealed under an earlier APP_SECRET: it cannot be read any more
+        return JSONResponse({"error": "gone", "detail": "This location is no longer available."}, status_code=410,
+                            headers={"Cache-Control": "no-store"})
     age = max(0, int((row["now"] - row["captured_at"]).total_seconds() // 60))
     lat, lon = coords["lat"], coords["lon"]
     body = {
