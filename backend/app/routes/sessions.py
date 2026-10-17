@@ -169,16 +169,13 @@ async def end(request: Request, session_id: str, body: PinIn):
     return await _pin_action(request, session_id, body, end=True)
 
 
+def _entry(r: dict) -> dict:
+    return {"at": r["at"].isoformat(), "actor": r["actor"], "kind": r["kind"], "from_state": r["from_state"],
+            "to_state": r["to_state"], "detail": r["detail"]}
+
+
 async def visible_timeline(conn, session_id) -> list[dict]:
-    cur = await conn.execute(
-        """SELECT a.id, a.at, a.actor, a.kind, a.from_state, a.to_state, a.detail
-             FROM audit_log a
-            WHERE a.session_id = %s
-              AND (NOT a.masked OR a.alert_id IS NULL OR NOT EXISTS (
-                    SELECT 1 FROM alerts al WHERE al.id = a.alert_id AND al.status IN ('OPEN', 'ACKED')))
-            ORDER BY a.id""", (session_id,))
-    return [{"at": r["at"].isoformat(), "actor": r["actor"], "kind": r["kind"], "from_state": r["from_state"],
-             "to_state": r["to_state"], "detail": r["detail"]} for r in await cur.fetchall()]
+    return [_entry(r) for r in await audit.visible_rows(conn, session_id)]
 
 
 @router.get("/v1/sessions/{session_id}/timeline")
@@ -202,10 +199,12 @@ async def export(request: Request):
         out = []
         for s in sessions:
             chain = await audit.verify_chain(conn, audit.session_chain(s["id"]))
+            rows = await audit.visible_rows(conn, s["id"])
+            # head_hash covers the listed entries (each with its masked flag), so anyone can recompute it.
             out.append({"session_id": str(s["id"]), "created_at": s["created_at"].isoformat(),
                         "ended_at": s["ended_at"].isoformat() if s["ended_at"] else None,
-                        "chain_ok": chain["ok"], "head_hash": chain["head"],
-                        "entries": await visible_timeline(conn, s["id"])})
+                        "chain_ok": chain["ok"], "head_hash": audit.public_head(rows),
+                        "entries": [{**_entry(r), "masked": r["masked"]} for r in rows]})
         user_chain = await audit.verify_chain(conn, audit.user_chain(user["id"]))
         return {"user": user["display_name"], "sessions": out,
                 "account_chain_ok": user_chain["ok"], "account_head_hash": user_chain["head"],

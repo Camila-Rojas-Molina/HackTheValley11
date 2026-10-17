@@ -288,7 +288,10 @@ The session's timeline. Duress entries stay hidden until that alert is closed.
 
 ### `GET /v1/me/export`
 
-Every session's visible timeline. The server recomputes the per-session and account hash chains.
+Every session's visible timeline. The server recomputes the per-session and account hash chains
+(`chain_ok`). `head_hash` is the chain over the listed entries (each carries its `masked` flag), so it can be
+recomputed from the export with `app/audit.py`; the "Ended ✓ Timeline head" message carries its first 16
+characters.
 
 ```json
 {"user": "Maya",

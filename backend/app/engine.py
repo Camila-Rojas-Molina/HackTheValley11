@@ -310,12 +310,11 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
 
     # Timeline
     chain = audit.session_chain(session_id)
-    head_hash = None
     for e in d.audit:
         detail = dict(e.detail)
         if d.through and e.kind in ("resolved", "false_alarm"):
             detail.setdefault("through", d.through)
-        head_hash = await audit.append(
+        await audit.append(
             conn, chain_key=chain, actor=actor, kind=e.kind, user_id=sess["user_id"], session_id=session_id,
             alert_id=alert_id,
             from_state=e.from_state if e.from_state is not None else d.from_state,
@@ -339,7 +338,8 @@ async def apply(conn, session_id, event: Event, *, actor: str, event_key: str, c
                 loc_cache["loc"] = await share_for_alert(conn, ctx, alert_id, now)
             p["location"] = loc_cache["loc"]
         if n.template == "ended":
-            p["head"] = head_hash or await audit.head(conn, chain)
+            # The head of what she can see, so it recomputes from her export (masked duress too).
+            p["head"] = audit.public_head(await audit.visible_rows(conn, session_id))
         text = messages.render(n.template, p)
         contact = by_id.get(n.contact_id) if n.to == "contact" else None
         if n.to == "contact" and contact is None:

@@ -106,6 +106,30 @@ def verify_rows(rows: list[dict]) -> dict:
     return {"ok": True, "head": prev, "count": len(rows), "bad_id": None}
 
 
+# An entry the wearer can see: not masked, or its masked alert is closed. While a masked
+# (duress) alert is open its entries stay hidden from her timeline and export.
+VISIBLE_SQL = """(NOT a.masked OR a.alert_id IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM alerts al WHERE al.id = a.alert_id AND al.status IN ('OPEN', 'ACKED')))"""
+
+
+async def visible_rows(conn, session_id) -> list[dict]:
+    cur = await conn.execute(
+        f"""SELECT a.id, a.chain_key, a.at, a.actor, a.kind, a.from_state, a.to_state, a.detail, a.masked
+              FROM audit_log a WHERE a.session_id = %s AND {VISIBLE_SQL} ORDER BY a.id""", (session_id,))
+    return [dict(r) for r in await cur.fetchall()]
+
+
+def public_head(rows: list[dict]) -> str:
+    """Head of the chain over the entries the wearer can see, so she can recompute it from her
+    export. Hidden entries join it once their alert is closed; with none, it is the stored head."""
+    prev = GENESIS
+    for r in rows:
+        prev = compute_hash(prev, entry_payload(chain_key=r["chain_key"], at=r["at"], actor=r["actor"],
+                                                kind=r["kind"], from_state=r["from_state"],
+                                                to_state=r["to_state"], detail=r["detail"], masked=r["masked"]))
+    return prev
+
+
 async def verify_chain(conn, chain_key: str) -> dict:
     cur = await conn.execute(
         """SELECT id, chain_key, at, actor, kind, from_state, to_state, detail, masked, prev_hash, hash

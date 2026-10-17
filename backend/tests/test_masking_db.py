@@ -312,3 +312,31 @@ async def test_arming_again_after_a_duress_end_starts_a_fresh_session(client, db
     # The device now talks to the new session in both worlds.
     assert await device_view(client, real) == await device_view(client, duress) == \
         (states.ARMED, {"led": "off", "blink_n": 0, "challenge_id": False})
+
+
+def recompute(session_id, entries) -> str:
+    """What anyone holding the export can compute from the entries it lists (app/audit.py is public)."""
+    from datetime import datetime
+
+    from app import audit
+    prev = audit.GENESIS
+    for e in entries:
+        payload = audit.entry_payload(chain_key=audit.session_chain(session_id), at=datetime.fromisoformat(e["at"]),
+                                      actor=e["actor"], kind=e["kind"], from_state=e["from_state"],
+                                      to_state=e["to_state"], detail=e["detail"], masked=e.get("masked", False))
+        prev = audit.compute_hash(prev, payload)
+    return prev
+
+
+@pytest.mark.parametrize("action", ["cancel", "end"])
+async def test_export_head_hash_recomputes_from_the_visible_entries_for_both_pins(client, db, ctx, action):
+    real, duress = await twin_worlds(client, db)
+    await cancel_both(client, real, duress, action=action)
+    for w in (real, duress):
+        ex = (await client.get("/v1/me/export", headers=w.wearer)).json()
+        s = ex["sessions"][-1]
+        assert s["chain_ok"] is True
+        assert recompute(s["session_id"], s["entries"]) == s["head_hash"], w is duress
+        if action == "end":
+            msg = [t for t in await wearer_texts(db, w) if t.startswith("Ended ✓")][-1]
+            assert msg == f"Ended ✓ Timeline head: {s['head_hash'][:16]}", w is duress
