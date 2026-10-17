@@ -1,9 +1,10 @@
-"""Job status, seconds and cost (C1, C5). M1: 501 until the job queue lands."""
+"""Job status, seconds and cost (C1, C5). The queue exists from M2 (app/jobs.py); this route goes live with
+the worker and POST /scans/{id}/runs in M5, and answers 501 until then."""
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ..contract_fixtures import serve
+from ..contract_fixtures import not_available
 from ..schemas import API_PREFIX, route_kwargs
 
 router = APIRouter(prefix=API_PREFIX)
@@ -11,4 +12,4 @@ router = APIRouter(prefix=API_PREFIX)
 
 @router.get("/jobs/{job_id}", **route_kwargs("get_job"))
 async def get_job(job_id: str):
-    return serve("get_job", f"/jobs/{job_id}", "job_id")
+    return not_available("get_job")

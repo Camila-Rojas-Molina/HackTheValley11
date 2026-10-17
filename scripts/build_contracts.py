@@ -476,7 +476,8 @@ def build(out: dict[str, str]) -> list[dict]:
                                        ("ai_generation", "7 days"))],
          "continuous_aggregates": [
              {"name": "scan_metrics_monthly", "hypertable": "scan_metrics", "bucket": "1 month",
-              "group_by": ["bucket", "patient_id", "site", "provenance", "mask_source", "lesion_model"],
+              "group_by": ["bucket", "patient_id", "site", "provenance", "mask_source", "lesion_model",
+                           "lesion_grid", "statistic"],
               "materialized_only": None},
              {"name": "fe_level_daily", "hypertable": "fe_element_results", "bucket": "1 day",
               "group_by": ["bucket", "patient_id", "site", "provenance", "mask_source", "lesion_model", "run_id"],

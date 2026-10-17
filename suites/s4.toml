@@ -2,19 +2,27 @@
 # api/tests/ai/** belongs to S5 (suites/s5.toml), so every S4 command leaves it out.
 # Database tests use pgserver with PGDATA in <worktree>/.pgdata/ and the database rb_test_<worktree hash>,
 # or the server in RB_TEST_PG_URI (CI: a postgres:16 service container).
+# TimescaleDB tests use RB_TEST_TSDB_URI (CI: a timescale/timescaledb:latest-pg16 service container), or start
+# this worktree's own throwaway container rb-tsdb-<worktree hash> on a free 127.0.0.1 port. Never Tiger Cloud.
 stream = "S4"
 
 [suites.unit]
-what = "API without a database: import cuts, per-worktree test names"
+what = "API without a database: settings, asset names and kinds, the flag rule, cost, import cuts, test names"
 run = ".venv/bin/python -m pytest -q -p no:cacheprovider api/tests --ignore=api/tests/ai -m 'unit and not contract'"
 timeout = 600
 
 [suites.contract]
-what = "C1 on the real app: every mounted route, fixtures verbatim, 501 bodies, 404s, health 200/503, openapi.json snapshot"
+what = "C1 on the seeded database: every mounted route, fixtures, 501 bodies, 404s, health 200/503, openapi.json snapshot"
 run = ".venv/bin/python -m pytest -q -p no:cacheprovider api/tests --ignore=api/tests/ai -m contract"
 timeout = 900
 
 [suites.db]
-what = "API on Postgres: the session database is this worktree's rb_test_<hash>"
+what = "Postgres: migrations twice, C3 checks, audit chain and guard, jobs lease (30 s job), security, seed, budget"
 run = ".venv/bin/python -m pytest -q -p no:cacheprovider api/tests --ignore=api/tests/ai -m 'db and not contract'"
 timeout = 900
+
+[suites.tsdb]
+what = "TimescaleDB container: hypertables, provenance-grouped caggs, no retention, 9-month backfill refresh, API"
+run = ".venv/bin/python -m pytest -q -p no:cacheprovider api/tests --ignore=api/tests/ai -m tsdb"
+timeout = 900
+requires_docker = true

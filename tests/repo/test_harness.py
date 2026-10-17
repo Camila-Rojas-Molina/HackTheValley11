@@ -249,7 +249,8 @@ def test_bootstrap_refuses_a_python_that_is_not_3_12(tmp_path):
     assert not (tmp_path / ".venv").exists()
 
 
-@pytest.mark.parametrize("script", ["bootstrap.sh", "test_all.sh", "integrate.sh", "watchdog.sh", "donecheck/m1.sh"])
+@pytest.mark.parametrize("script", ["bootstrap.sh", "test_all.sh", "integrate.sh", "watchdog.sh", "donecheck/m1.sh",
+                                    "dev.sh", "donecheck/m2.sh", "donecheck/m3.sh"])
 def test_scripts_are_executable_bash(script):
     p = REPO / "scripts" / script
     assert os.access(p, os.X_OK), p

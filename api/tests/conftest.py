@@ -7,13 +7,23 @@ runs in other worktrees, or a second runner in this repo, never drop each other'
 - PGDATA:   <worktree>/.pgdata/   (gitignored; never a shared parent directory)
 With neither pgserver nor RB_TEST_PG_URI the database tests skip and the unit tests still run.
 
+TimescaleDB tests (`tsdb_base_uri`) use the server in RB_TEST_TSDB_URI (CI: a timescale/timescaledb:latest-pg16
+service container), or start this worktree's own throwaway container rb-tsdb-<hash> on a free 127.0.0.1 port
+with Docker ("${DOCKER:-$HOME/.docker/bin/docker}") and remove it at the end (RB_TSDB_KEEP=1 keeps it). Never
+Tiger Cloud: the schema reaches it only after G1.
+
 Markers (pytest.ini) are applied here: a test that uses `pg_base_uri` (directly or through `client`) is
-`db`; FILE_MARKS adds the file's own markers; a test with neither `db` nor a live marker is `unit`.
+`db`; one that uses `tsdb_base_uri` is `tsdb`; FILE_MARKS adds the file's own markers; a test with none of
+`db`, `tsdb` or a live marker is `unit`.
 """
 from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import socket
+import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -76,9 +86,11 @@ def pytest_collection_modifyitems(config, items):
         names |= {m.name for m in item.iter_markers()} & LIVE
         if "pg_base_uri" in getattr(item, "fixturenames", ()):
             names.add("db")
+        if "tsdb_base_uri" in getattr(item, "fixturenames", ()):
+            names.add("tsdb")
         if names & LIVE:
             names.add("slow")
-        elif "db" not in names:
+        elif not names & {"db", "tsdb"}:
             names.add("unit")
         for name in sorted(names):
             item.add_marker(getattr(pytest.mark, name))
@@ -102,9 +114,18 @@ def db_url(pg_base_uri) -> str:
 
 
 @pytest.fixture(scope="session")
-def settings(db_url) -> Settings:
-    return Settings(database_url=db_url, admin_key=ADMIN_KEY, run_workers=False, auto_migrate=True,
-                    demo_seed=False)
+def storage_dirs(tmp_path_factory) -> tuple[Path, Path]:
+    """(storage_dir, demo_dir) for the session app: empty temporary folders, so asset tests are hermetic."""
+    root = tmp_path_factory.mktemp("rb-assets")
+    (root / "storage").mkdir()
+    (root / "demo").mkdir()
+    return root / "storage", root / "demo"
+
+
+@pytest.fixture(scope="session")
+def settings(db_url, storage_dirs) -> Settings:
+    return Settings(database_url=db_url, admin_key=ADMIN_KEY, auto_migrate=True, demo_seed=True,
+                    storage_dir=storage_dirs[0], demo_dir=storage_dirs[1], max_upload_mb=1)
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -119,3 +140,60 @@ async def app(settings):
 async def client(app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
         yield c
+
+
+# --- TimescaleDB (throwaway, per worktree) -------------------------------------------------------
+TSDB_IMAGE = "timescale/timescaledb:latest-pg16"
+TSDB_CONTAINER = "rb-tsdb-" + hashlib.sha256(str(WORKTREE.resolve()).encode("utf-8")).hexdigest()[:8]
+
+
+def _docker() -> Optional[str]:
+    d = os.environ.get("DOCKER") or str(Path.home() / ".docker" / "bin" / "docker")
+    return d if (Path(d).exists() or shutil.which(d)) else None
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _wait_ready(uri: str, timeout: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with psycopg.connect(uri, connect_timeout=2) as c:
+                c.execute("SELECT 1")
+            return
+        except psycopg.OperationalError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.5)
+
+
+@pytest.fixture(scope="session")
+def tsdb_base_uri():
+    uri = os.environ.get("RB_TEST_TSDB_URI")
+    if uri:
+        yield uri
+        return
+    docker = _docker()
+    if docker is None or subprocess.run([docker, "info"], capture_output=True).returncode != 0:
+        pytest.skip("no TimescaleDB for tsdb tests (set RB_TEST_TSDB_URI or start Docker)")
+    port_out = subprocess.run([docker, "port", TSDB_CONTAINER, "5432/tcp"], capture_output=True, text=True)
+    started = False
+    if port_out.returncode == 0 and port_out.stdout.strip():
+        port = int(port_out.stdout.strip().splitlines()[0].rsplit(":", 1)[1])   # reuse this worktree's container
+    else:
+        subprocess.run([docker, "rm", "-f", TSDB_CONTAINER], capture_output=True)
+        port = _free_port()
+        subprocess.run([docker, "run", "-d", "--name", TSDB_CONTAINER, "-p", f"127.0.0.1:{port}:5432",
+                        "-e", "POSTGRES_HOST_AUTH_METHOD=trust", TSDB_IMAGE], check=True, capture_output=True)
+        started = True
+    uri = f"postgresql://postgres@127.0.0.1:{port}/postgres"
+    _wait_ready(uri)
+    try:
+        yield uri
+    finally:
+        if started and os.environ.get("RB_TSDB_KEEP") != "1":
+            subprocess.run([docker, "rm", "-f", TSDB_CONTAINER], capture_output=True)

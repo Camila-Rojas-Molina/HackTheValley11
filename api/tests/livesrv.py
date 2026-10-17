@@ -1,5 +1,5 @@
-"""A real StillHere server process for the live tests: scripts/run.py on a free port, its own database,
-no Telegram token and no Vultr key (the workers fall back to the log channel and the template).
+"""A real RainbowBone API process for the live tests: scripts/run.py on a free port, its own database, and no
+AI key (the chain answers with the template).
 """
 from __future__ import annotations
 
@@ -16,26 +16,19 @@ import httpx
 
 from tests.conftest import fresh_database
 
-BACKEND = Path(__file__).resolve().parent.parent
-SCRIPTS = BACKEND / "scripts"
-KEYS = {"ADMIN_KEY": "live-admin", "DEVICE_KEY": "live-device", "WEARER_KEY": "live-wearer", "DEMO_PIN": "2468",
-        "DEMO_DURESS_PIN": "1357", "APP_SECRET": "live-secret"}
-ADMIN = {"X-Admin-Key": KEYS["ADMIN_KEY"]}
-WEARER = {"Authorization": f"Bearer {KEYS['WEARER_KEY']}"}
-DEVICE_ID = "scrunchie-1"
+API_DIR = Path(__file__).resolve().parent.parent
+SCRIPTS = API_DIR / "scripts"
+KEYS = {"RB_ADMIN_KEY": "live-admin"}
+ADMIN = {"X-Admin-Key": KEYS["RB_ADMIN_KEY"]}
 # Unset for every live server: the code must run without any of them.
-NO_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_USERNAME", "VULTR_API_KEY", "PULSOID_TOKEN")
+NO_KEYS = ("GEMINI_API_KEY", "GROQ_API_KEY", "VULTR_API_KEY", "VULTR_INFERENCE_API_KEY", "LOCAL_LLM_BASE_URL",
+           "DATABASE_URL")
 
 
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-def device_headers(boot: str = "lv", seq: int = 1) -> dict:
-    return {"Authorization": f"Bearer {KEYS['DEVICE_KEY']}", "X-Device-Id": DEVICE_ID, "X-Boot-Id": boot,
-            "X-Seq": str(seq)}
 
 
 def wait_for(fn, timeout: float, what: str, every: float = 0.2):
@@ -56,12 +49,12 @@ class LiveServer:
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.log = log_dir / f"{name}.log"
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("STILLHERE_TSDB", "PYTEST")) and k not in NO_KEYS}
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("RB_", "AI_", "PYTEST")) and k not in NO_KEYS}
         env.update(KEYS)
-        env.update({"DATABASE_URL": self.server_db_url, "HOST": "127.0.0.1", "PORT": str(self.port),
-                    "PUBLIC_BASE_URL": self.base, "RUN_WORKERS": "1", "AUTO_MIGRATE": "1", "DEMO_SEED": "1",
-                    "STILLHERE_PROFILE": "demo", "STILLHERE_URL": self.base, "LOG_LEVEL": log_level,
-                    "PYTHON": sys.executable, "DEMO_DEVICE_ID": DEVICE_ID})
+        env.update({"RB_DATABASE_URL": self.server_db_url, "HOST": "127.0.0.1", "PORT": str(self.port),
+                    "RB_AUTO_MIGRATE": "1", "RB_DEMO_SEED": "1", "AI_CHAIN": "template", "LOG_LEVEL": log_level,
+                    "PYTHON": sys.executable})
         for k in NO_KEYS:
             env[k] = ""
         env.update(extra_env or {})
@@ -70,7 +63,7 @@ class LiveServer:
 
     def start(self, wait: bool = True) -> "LiveServer":
         fh = open(self.log, "ab")
-        self.proc = subprocess.Popen([sys.executable, str(SCRIPTS / "run.py")], cwd=BACKEND, env=self.env,
+        self.proc = subprocess.Popen([sys.executable, str(SCRIPTS / "run.py")], cwd=API_DIR, env=self.env,
                                      stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
         if wait:
             self.wait_healthy()

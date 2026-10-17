@@ -14,8 +14,8 @@ API = Path(__file__).resolve().parents[1]
 DELETED_APP = {"states", "engine", "rules", "sensors", "telegram", "messages", "timers", "care"}
 DELETED_ROUTES = {"device", "hr", "sessions", "contacts", "demo", "care", "telemetry"}
 
-MOVED = ["app.main", "app.config", "app.db", "app.deps", "app.security", "app.audit", "app.timeseries",
-         "app.outbox", "app.routes.health", "scripts.migrate", "scripts.run", "tests.contract_routes",
+MOVED = ["app.main", "app.config", "app.db", "app.deps", "app.security", "app.audit", "app.tiger", "app.jobs",
+         "app.routes.health", "scripts.migrate", "scripts.run", "tests.contract_routes",
          "tests.livesrv"]
 
 

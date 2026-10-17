@@ -33,7 +33,7 @@ Push 2 implements this as `api/migrations/rb_001_core.sql`, `rb_002_timeseries.s
 ## Continuous aggregates (grouped by provenance)
 | Aggregate | Over | Bucket | Group by | Columns |
 |---|---|---|---|---|
-| `scan_metrics_monthly` | `scan_metrics` | 1 month | bucket, patient_id, site, provenance, mask_source, lesion_model | `count`, `sum` and `avg` of each metric, `min`/`max` of lesion volume (the moving average is computed at query time from `sum`/`count`) |
+| `scan_metrics_monthly` | `scan_metrics` | 1 month | bucket, patient_id, site, provenance, mask_source, lesion_model, lesion_grid, statistic | `count`, `sum` and `avg` of each metric, `min`/`max` of lesion volume (the moving average is computed at query time from `sum`/`count`). `lesion_grid` and `statistic` keep the original and 1 mm crop grids, and the two stiffness statistics, in separate rows |
 | `fe_level_daily` | `fe_element_results` | 1 day | bucket, patient_id, site, provenance, mask_source, lesion_model, run_id | `count`, `avg`/`min`/`max` of `strain_min_ue`, `e_mpa`; `percentile_agg` only if it works inside a cagg on our service (else min/avg/max) |
 
 - No automatic refresh policy reaches history: after inserting a scan, the API calls `refresh_continuous_aggregate` over that scan's bucket range (M2 test: a scan 9 months back shows up after a range refresh).

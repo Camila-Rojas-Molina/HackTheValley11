@@ -239,6 +239,7 @@ node_modules/
 *.stl
 data/
 .pgdata/
+.rb-dev/
 .rb-status.md
 !demo/**
 demo/**/.env*

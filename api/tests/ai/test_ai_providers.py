@@ -90,11 +90,11 @@ def test_moved_vultr_reports_unavailable_without_a_key():
     assert s["configured"] is False and s["available"] is False and s["key"] is None
 
 
-def test_moved_vultr_without_a_key_never_touches_the_network():
+def test_moved_vultr_without_a_key_never_touches_the_network(facts):
     def refuse(request):
         raise AssertionError(f"network call to {request.url}")
 
     vultr.reset_state()
-    result = asyncio.run(vultr.abriefing({"level": "low", "rules": []}, env={},
+    result = asyncio.run(vultr.agenerate("care_team_summary", facts, env={},
                                          transport=httpx.MockTransport(refuse)))
     assert result["source"] == "template"

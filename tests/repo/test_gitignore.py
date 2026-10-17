@@ -31,7 +31,7 @@ def test_tracked(path):
     "web/node_modules/next/package.json", "node_modules/x/index.js", "web/.next/cache/x", "scan.nii",
     "rb-data/ct.nii.gz", "pipeline/out/strain.nii.gz", "x/slice.dcm", "out/mesh.vtu", "out/surface.vtp",
     "out/fields.vti", "out/mesh.mz3", "out/vertebra.stl", "data/ct.nii.gz", "pipeline/data/big.bin",
-    ".pgdata/PG_VERSION", "api/.pgdata/x", ".rb-status.md", ".env", "api/.env", "web/.env.local", ".env.bak",
+    ".pgdata/PG_VERSION", "api/.pgdata/x", ".rb-dev/api.log", ".rb-status.md", ".env", "api/.env", "web/.env.local", ".env.bak",
     ".env.bak2", "demo/.env", "pipeline/.venv/bin/python", "lib/x.py",
 ])
 def test_ignored(path):

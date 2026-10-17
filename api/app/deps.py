@@ -1,73 +1,43 @@
-"""Request helpers: auth for device / wearer / operator, canonical JSON replies."""
+"""Request helpers: the database handle and the admin key check."""
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from typing import Optional
-
 from fastapi import HTTPException, Request
-from fastapi.responses import Response
 
 from .config import Settings
-from .security import same, sha256_hex
+from .security import same
 
 
-@dataclass
-class Ctx:
-    """What the routes read from app.state.ctx (was engine.Ctx; engine.py was removed in Push 1)."""
-    settings: Settings
-    secret: str
+class AdminDisabled(Exception):
+    """RB_ADMIN_KEY is unset: admin routes answer 503 with the Unavailable body (main.py handler)."""
 
 
-def canonical_json(data: dict, status_code: int = 200) -> Response:
-    """Deterministic bytes (sorted keys, no spaces) so equal replies are byte-identical."""
-    body = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
-    return Response(content=body.encode("utf-8"), status_code=status_code, media_type="application/json")
+class DatabaseNotReady(Exception):
+    """Migrations or the seed have not run yet: database routes answer 503 (main.py handler)."""
 
 
 def get_db(request: Request):
     return request.app.state.db
 
 
-def get_ctx(request: Request) -> Ctx:
-    ctx: Ctx = request.app.state.ctx
-    if not ctx.secret:
-        raise HTTPException(503, "database unavailable")
-    return ctx
+def ready_db(request: Request):
+    """The database, once start-up migrations and the seed have run; 503 before that."""
+    if not getattr(request.app.state, "db_ready", False):
+        raise DatabaseNotReady()
+    return request.app.state.db
 
 
-def _bearer(request: Request) -> Optional[str]:
-    auth = request.headers.get("authorization") or ""
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip() or None
-    return None
+def get_settings(request: Request) -> Settings:
+    return request.app.state.settings
 
 
-async def require_device(request: Request, conn) -> dict:
-    key = _bearer(request)
-    device_id = request.headers.get("x-device-id")
-    if not key or not device_id:
-        raise HTTPException(401, "device key and X-Device-Id required")
-    row = await (await conn.execute("SELECT * FROM devices WHERE id = %s", (device_id,))).fetchone()
-    if row is None or not same(row["device_key_hash"], sha256_hex(key)):
-        raise HTTPException(401, "unknown device or wrong key")
-    return row
-
-
-async def require_wearer(request: Request, conn) -> dict:
-    key = _bearer(request)
-    if not key:
-        raise HTTPException(401, "wearer key required")
-    row = await (await conn.execute("SELECT * FROM users WHERE api_key_hash = %s", (sha256_hex(key),))).fetchone()
-    if row is None:
-        raise HTTPException(401, "wrong wearer key")
-    return row
+def is_admin(request: Request) -> bool:
+    expected = request.app.state.settings.admin_key
+    return bool(expected) and same(request.headers.get("x-admin-key"), expected)
 
 
 def require_admin(request: Request) -> None:
-    ctx: Ctx = request.app.state.ctx
-    expected = ctx.settings.admin_key
-    if not expected:
-        raise HTTPException(503, "operator endpoints are disabled: ADMIN_KEY is not set")
-    if not same(request.headers.get("x-admin-key"), expected):
-        raise HTTPException(401, "wrong X-Admin-Key")
+    """Admin routes: 503 when RB_ADMIN_KEY is unset, 401 when X-Admin-Key is missing or wrong."""
+    if not request.app.state.settings.admin_key:
+        raise AdminDisabled()
+    if not is_admin(request):
+        raise HTTPException(401, "X-Admin-Key missing or wrong")

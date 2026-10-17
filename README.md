@@ -18,8 +18,9 @@ Data: Nohel et al. 2026, Spinal-Multiple-Myeloma-SEG, TCIA, DOI 10.7937/k4qv-hh7
 
 ## Status
 
-Hack the Valley 11 build, in milestones. **M1 (this skeleton):** the module layout, frozen contracts, typed
-pipeline stubs, AI interfaces with a template-only chain, routes that serve golden fixtures, and per-stream CI.
+Hack the Valley 11 build, in milestones. **M1:** the module layout, frozen contracts, typed pipeline stubs, AI
+interfaces with a template-only chain and per-stream CI. **M2:** database-backed routes, the rb_ migrations and
+Tiger schema (tested on throwaway local databases only; Tiger Cloud after G1), the jobs queue and the audit chain.
 Segmentation, finite-element physics, live AI calls and deployment arrive after the team's Step 1 review (G1).
 The StillHere code this repo held before is kept at the tag `stillhere-final`.
 
@@ -48,10 +49,12 @@ scripts/test_all.sh all                               # every registered suite: 
 .venv/bin/python scripts/build_contracts.py --check   # fixtures + openapi.json match api/app/schemas.py
 .venv/bin/python api/scripts/run.py                   # the API (routes under /api/v1)
 cd web && npm ci && npm run dev                       # the dashboard
+scripts/dev.sh                                        # throwaway DB + API + web, detached; prints PIDs and ports
+scripts/dev.sh stop                                   # stop them (also: api, web, status, stop-api, stop-db)
 ```
 
 Large data (full CTs, model weights) never enters the repo: set `RB_DATA_DIR` to a folder outside it.
-Secrets go in `api/.env` (never committed); the AI names are in `contracts/ai-interface.md` until Push 2 rewrites `api/.env.example`.
+Secrets go in `api/.env` (never committed); `api/.env.example` lists every name, the AI ones included.
 
 ## How the team builds it
 

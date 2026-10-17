@@ -41,7 +41,9 @@
         "site",
         "provenance",
         "mask_source",
-        "lesion_model"
+        "lesion_model",
+        "lesion_grid",
+        "statistic"
       ],
       "materialized_only": null
     },

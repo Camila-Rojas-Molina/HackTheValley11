@@ -1,17 +1,19 @@
-"""Vultr Serverless Inference client. Used ONLY to word PointClickCare care-team briefings.
+"""Vultr Serverless Inference client: the moved StillHere client, re-scoped for RainbowBone in M2.
 
-The PCC rule engine decides everything on the alert card (score, level, rules,
-suggested check) before this module runs; the model only turns those findings
-into two or three plain sentences for a care team. Nothing here can change a
-KAZE state, timer, alert or message, and no module on the KAZE check-in or
-escalation path imports this one (backend/tests/test_vultr.py checks both ways).
+It words the facts of one scan pair (C4, contracts/ai-interface.md) for the care-team summary or the
+patient explanation. Our code computed every number; the model only words them, and accept_text() runs
+the RainbowBone checker (contract.check) on every reply before it can be shown.
+
+Galit's gate: no chain tier calls this module before M6. The chain's Vultr tier (openai_compat.vultr) is
+a stub until then and AI_CHAIN defaults to `template`, so the app never reaches the code below that posts.
+With no key nothing here touches the network.
 
 API: OpenAI-compatible chat completions.
     POST {VULTR_BASE_URL}/chat/completions
     Authorization: Bearer <Serverless Inference key>
     https://docs.vultr.com/products/compute/serverless-inference/management/usage/chat.md
 
-Env (all optional; with no key every call returns template_briefing(card)):
+Env (all optional; with no key every call returns the template):
     VULTR_API_KEY            the Serverless Inference subscription key (Console > Serverless >
                              Inference > Overview), not the account API key.
                              VULTR_INFERENCE_API_KEY is read when VULTR_API_KEY is unset.
@@ -21,17 +23,23 @@ Env (all optional; with no key every call returns template_briefing(card)):
     VULTR_MAX_TOKENS         default 400
     VULTR_REASONING_EFFORT   default "minimal"; empty to leave the field out (for models without it)
 
-Fallback to the template on: no key, timeout, connection error, any non-2xx, an
-unexpected body, empty, cut-off or over-long text, text that breaks the wording
-rules, or a number that is not on the card.
-429 and 5xx are retried once after a short jittered pause. After a failure the
-client skips Vultr for 60 s, so a refreshed page never waits on a dead endpoint.
-Texts are cached per card (a rejected text as "use the template"), so refreshes do
-not call the API again.
+The filter (accept_text), re-scoped in M2:
+    kept      strips <think>...</think>, and rejects an unexpected body, a `length` finish, empty text and
+              any number that is not in the facts.
+    changed   the reply is the C4 JSON {headline, detail, numbers_used}, and the number, spelled-out
+              quantity, wording and length rules are contract.check(), which reads its lists from
+              contracts/labels.json (ai). So it still blocks "risk" and "predict", it no longer blocks
+              "fall"/"fell", and cm³ and cm3 both pass (the 3 of cm3 follows a letter, so it is not a
+              number). StillHere's two wording lists for the care-home cards are gone.
 
-Privacy: only the rule findings leave the server. resident_id, display_name and
-any existing briefing are removed, and the name is replaced inside free text.
-The name is added back locally in front of the returned text.
+Fallback to the template (template.template) on: no key, timeout, connection error, any non-2xx, an
+unexpected body, or a reply accept_text() rejects. 429 and 5xx are retried once after a short jittered
+pause. After a failure the client skips Vultr for 60 s, so a refreshed page never waits on a dead
+endpoint. Accepted texts are cached per (model, task, prompt version, facts sha256), and a rejected reply
+as "use the template", so refreshes do not call the API again.
+
+Privacy: the request holds the system prompt and the facts JSON only (facts.facts_json): numbers and
+enums, with no names, DICOM tags, dates or free text.
 
     python -m app.ai.providers.vultr   (from api/) prints the config (never the key)
 """
@@ -49,11 +57,16 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Union
 
 import httpx
 
-log = logging.getLogger("stillhere.vultr")
+from app.ai import contract
+from app.ai.facts import facts_json, facts_sha256
+from app.ai.template import template
+from app.schemas import Facts, GeneratedText
+
+log = logging.getLogger("rainbowbone.ai.vultr")
 
 DEFAULT_BASE_URL = "https://api.vultrinference.com/v1"
 DEFAULT_MODEL = "qwen3.8-flash-next"
@@ -62,57 +75,14 @@ DEFAULT_MAX_TOKENS = 400
 DEFAULT_REASONING_EFFORT = "minimal"
 FAILURE_COOLDOWN_S = 60.0
 RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
-MAX_CHARS = 700
 CACHE_SIZE = 256
-USED_FOR = "PointClickCare care-team briefings only"
+USED_FOR = "RainbowBone care-team summary and patient explanation wording (live from M6)"
 
-LEVEL_PHRASES = {
-    "low": "no change worth acting on",
-    "worth a look this shift": "worth a look this shift",
-    "review this shift": "review this shift with the nurse",
-    "watch": "worth watching",              # earlier level names, for cards stored before them
-    "check today": "check in person today",
-}
-RULE_FIELDS = ("rule", "observed", "baseline", "unit", "contribution", "explanation")
-UNAVAILABLE = "Briefing unavailable; see the rule breakdown on the card."
-
-# The wording rules (BUILD_PLAN §7.3) bind model output too. The stems are stored
-# reversed so the repo-wide wording grep (tests/test_wording.py) stays a plain grep;
-# tests/test_vultr.py checks this list equals the one in that test.
-_BLOCKED_REVERSED = ("kips", "tacixotni", "suoicsnocnu", "songaid", "tceted", "dracydarb", "dracyhcat",
-                     "repmat", "ecnedive")
-BLOCKED_STEMS = tuple(s[::-1] for s in _BLOCKED_REVERSED)
-_BLOCKED = re.compile("|".join(BLOCKED_STEMS), re.IGNORECASE)
-# A briefing restates rule findings. It never names a condition and never predicts a time frame.
-# The second half mirrors the senior-mode card rules (tests/test_care_wording.py CARE_BLOCKLIST):
-# no forward-looking claim and no skin-temperature reading, since the briefing is shown on the card.
-# Plurals and other forms count too ("infections", "UTIs", "falling"), and so does a time frame
-# ("within 2 days", "in the next few days", "tomorrow").
-_NO_CONDITIONS = re.compile(
-    r"\b(?:infection|uti|delirium|dementia|parkinson\w*|stroke|sepsis|pneumonia|dehydrat\w*|disease|"
-    r"disorder|syndrome|illness)(?:e?s)?\b|\b48\s*(?:–|—|-|to)\s*72\b"
-    r"|hypotension|orthostatic|\bpots\b|urinary|septic|syncope|frail|sedat|hydration"
-    r"|predict|forecast|prevent|will fall|\bfall(?:s|ing|en)?\b|\bfell\b|\brisk|early warning|\b72\s*h"
-    r"|\bwithin\s+\d+(?:\.\d+)?\s*(?:h|hrs?|hours?|days?|weeks?)\b"
-    r"|\b(?:in|over)\s+the\s+(?:next|coming)\s+(?:few\s+)?(?:\d+\s+)?(?:hours?|days?|weeks?)\b|\btomorrow\b"
-    r"|skin|temperature|fever",
-    re.IGNORECASE)
 _THINK = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
-_NUMBER = re.compile(r"\d+(?:\.\d+)?")
-
-SYSTEM_PROMPT = (
-    "You write a short briefing for a nursing-home care team. The JSON you receive is the complete "
-    "output of a fixed rule engine run on SYNTHETIC demo data. Restate only what it contains: the level, "
-    "the change score out of 100 (change from the resident's own usual; never call it a risk score), "
-    "the rules that contributed most (observed value against the resident's own "
-    "baseline, with units) and the suggested check. Write two or three plain sentences, at most 70 words, "
-    "with no lists, headings or markdown. Refer to the person only as 'the resident'. Do not name or "
-    "suggest any illness or medical condition, do not guess causes, do not predict what will happen or "
-    "when, and do not add numbers that are not in the JSON. End with the suggested check."
-)
+_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.IGNORECASE | re.DOTALL)
 
 
-class BriefingRejected(ValueError):
+class TextRejected(ValueError):
     """The model answered, but the text cannot be shown."""
 
 
@@ -161,101 +131,12 @@ def status(env: Optional[Mapping[str, str]] = None) -> dict:
     return {"enabled": cfg.enabled, "base_url": cfg.base_url, "model": cfg.model, "used_for": USED_FOR}
 
 
-# --- deterministic template ---------------------------------------------------
-def _num(v: Any) -> Optional[str]:
-    if isinstance(v, bool) or v is None:
-        return None
-    if isinstance(v, int):
-        return str(v)
-    if isinstance(v, float) and math.isfinite(v):
-        return f"{v:.1f}".rstrip("0").rstrip(".") if v != int(v) else str(int(v))
-    if isinstance(v, str) and v.strip():
-        return v.strip()
-    return None
-
-
-def _contribution(rule: Mapping) -> float:
-    v = rule.get("contribution")
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else 0.0
-
-
-def _label(rule: Mapping) -> str:
-    return str(rule.get("rule") or "rule").replace("_", " ").strip()
-
-
-def _rule_phrase(rule: Mapping) -> str:
-    expl = rule.get("explanation")
-    if isinstance(expl, str) and expl.strip() and not _BLOCKED.search(expl):
-        return expl.strip().rstrip(".")
-    unit = f" {str(rule.get('unit')).strip()}" if rule.get("unit") else ""
-    obs, base = _num(rule.get("observed")), _num(rule.get("baseline"))
-    if obs is not None and base is not None:
-        return f"{_label(rule)} {obs}{unit} against a usual {base}{unit}"
-    if obs is not None:
-        return f"{_label(rule)} {obs}{unit}"
-    return _label(rule)
-
-
-def _prefix(card: Mapping) -> str:
-    name = str(card.get("display_name") or "").strip() or "Resident"
-    return f"{name} (SYNTHETIC)" if card.get("synthetic", True) else name
-
-
-def _top_rules(card: Mapping, n: int = 3) -> list:
-    rules = [r for r in (card.get("rules") or []) if isinstance(r, Mapping)]
-    rules.sort(key=_contribution, reverse=True)
-    contributing = [r for r in rules if _contribution(r) > 0]
-    return (contributing or rules)[:n]
-
-
-def template_briefing(card: Mapping) -> str:
-    """Deterministic briefing from the card alone. Never raises, never calls out."""
-    try:
-        level = str(card.get("level") or "").strip().lower()
-        phrase = LEVEL_PHRASES.get(level, "review the rule breakdown")
-        score = _num(card.get("score"))
-        text = f"{_prefix(card)}: {phrase}" + (f" (change score {score}/100)." if score is not None else ".")
-        parts = [_rule_phrase(r) for r in _top_rules(card)]
-        text += f" Main changes: {'; '.join(parts)}." if parts else " No rule added to the score."
-        check = card.get("suggested_check")
-        if isinstance(check, str) and check.strip():
-            text += f" Suggested check: {check.strip().rstrip('.')}."
-        text += (" This compares the resident with their own baseline over the 14 days before the last 48 h; "
-                 "it is not a medical assessment.")
-        return text
-    except Exception:  # a malformed card must never break the care page
-        log.warning("template_briefing could not read the card")
-        return UNAVAILABLE
-
-
 # --- request / response ---------------------------------------------------------
-def facts_for_model(card: Mapping) -> dict:
-    """What leaves the server: rule findings only, no identifiers."""
-    name = str(card.get("display_name") or "").strip()
-
-    def clean(v: Any) -> Any:
-        if v is None or isinstance(v, bool):
-            return v
-        if isinstance(v, (int, float)):
-            return v if math.isfinite(v) else None
-        s = str(v)
-        if name:
-            s = s.replace(name, "the resident")
-        return s[:300]
-
-    rules = [{k: clean(r.get(k)) for k in RULE_FIELDS if k in r}
-             for r in (card.get("rules") or []) if isinstance(r, Mapping)][:10]
-    return {"synthetic": bool(card.get("synthetic", True)), "score": clean(card.get("score")),
-            "level": clean(card.get("level")), "rules": rules, "suggested_check": clean(card.get("suggested_check"))}
-
-
-def request_body(card: Mapping, cfg: VultrConfig) -> dict:
+def request_body(task: str, facts: Facts, cfg: VultrConfig) -> dict:
+    """What leaves the server: the task's system prompt and the facts JSON, nothing else."""
     body = {
         "model": cfg.model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(facts_for_model(card), ensure_ascii=False, sort_keys=True)},
-        ],
+        "messages": contract.messages_for(task, facts_json(facts)),
         "max_tokens": cfg.max_tokens,
         "temperature": 0.2,
     }
@@ -264,46 +145,50 @@ def request_body(card: Mapping, cfg: VultrConfig) -> dict:
     return body
 
 
-def _numbers(text: str) -> set:
-    return {f"{float(n):g}" for n in _NUMBER.findall(text)}
+def accept_text(data: Any, facts: Facts) -> GeneratedText:
+    """The model's {headline, detail} after the RainbowBone checker, or TextRejected with the reason.
 
-
-def accept_text(data: Any, facts: Optional[Mapping] = None) -> str:
-    """The model's sentence(s), or BriefingRejected.
-
-    With `facts`, every number in the text must appear in them (or be the 100 of
-    "out of 100"): the model may reword the findings, never add to them.
+    numbers_used is recomputed from the text, so it is always true.
     """
     try:
         choice = data["choices"][0]
         content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError):
-        raise BriefingRejected("unexpected response body") from None
+        raise TextRejected("unexpected response body") from None
     if not isinstance(content, str):
-        raise BriefingRejected("no text content")
-    if choice.get("finish_reason") == "length":
-        raise BriefingRejected("cut off at max_tokens")
-    text = _THINK.sub(" ", content)
-    if "<think>" in text.lower():
-        raise BriefingRejected("unfinished reasoning")
-    text = re.sub(r"[*_`#>]+", "", text)
-    text = " ".join(text.split()).strip().strip('"').strip()
-    if not text:
-        raise BriefingRejected("empty text")
-    if len(text) > MAX_CHARS:
-        raise BriefingRejected("text too long")
-    if _BLOCKED.search(text) or _NO_CONDITIONS.search(text):
-        raise BriefingRejected("wording rules")
-    if facts is not None:
-        allowed = _numbers(json.dumps(facts, ensure_ascii=False)) | {"100"}
-        if not _numbers(text) <= allowed:
-            raise BriefingRejected("numbers not on the card")
-    return text
+        raise TextRejected("no text content")
+    finish = choice.get("finish_reason")
+    if finish == "length":  # checked before parsing: a cut-off reply is rarely valid JSON
+        raise TextRejected("cut off at the token limit")
+    raw = _THINK.sub(" ", content)
+    if "<think>" in raw.lower():
+        raise TextRejected("unfinished reasoning")
+    fenced = _FENCE.match(raw)
+    raw = (fenced.group(1) if fenced else raw).strip()
+    if not raw:
+        raise TextRejected("empty text")
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        raise TextRejected("not JSON") from None
+    if not isinstance(obj, dict):
+        raise TextRejected("not a JSON object")
+    try:
+        out = GeneratedText.model_validate(obj)
+    except ValueError:  # pydantic.ValidationError; keep the reason short
+        raise TextRejected("does not match the output schema") from None
+    if not out.headline.strip() or not out.detail.strip():
+        raise TextRejected("empty headline or detail")
+    out = out.model_copy(update={"numbers_used": sorted(contract.numbers_in(f"{out.headline}\n{out.detail}"))})
+    verdict = contract.check(out, facts, finish)
+    if not verdict.ok:
+        raise TextRejected(verdict.reason)
+    return out
 
 
 # --- cache and failure cooldown ------------------------------------------------------
 _lock = threading.Lock()
-_cache: "OrderedDict[str, str]" = OrderedDict()
+_cache: "OrderedDict[str, Union[GeneratedText, str]]" = OrderedDict()
 _down_until = 0.0
 
 
@@ -315,12 +200,12 @@ def reset_state() -> None:
         _down_until = 0.0
 
 
-def _key(card: Mapping, cfg: VultrConfig) -> str:
-    raw = json.dumps([cfg.base_url, cfg.model, facts_for_model(card)], sort_keys=True, default=str)
+def _key(task: str, facts: Facts, cfg: VultrConfig) -> str:
+    raw = json.dumps([cfg.base_url, cfg.model, task, contract.PROMPT_VERSION, facts_sha256(facts)])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _cached(key: str) -> Optional[str]:
+def _cached(key: str) -> Optional[Union[GeneratedText, str]]:
     with _lock:
         text = _cache.get(key)
         if text is not None:
@@ -328,7 +213,7 @@ def _cached(key: str) -> Optional[str]:
         return text
 
 
-def _remember(key: str, text: str) -> None:
+def _remember(key: str, text: Union[GeneratedText, str]) -> None:
     with _lock:
         _cache[key] = text
         _cache.move_to_end(key)
@@ -345,26 +230,8 @@ def _failed(reason: str) -> None:
     global _down_until
     with _lock:
         _down_until = time.monotonic() + FAILURE_COOLDOWN_S
-    log.warning("vultr briefing fell back to the template (%s); retrying Vultr after %.0f s",
+    log.warning("vultr text fell back to the template (%s); retrying Vultr after %.0f s",
                 reason, FAILURE_COOLDOWN_S)
-
-
-def _result(card: Mapping, text: Optional[str], cfg: VultrConfig) -> dict:
-    if not text:  # None: not called or failed; "": this card's model text was rejected
-        return {"text": template_briefing(card), "source": "template", "model": None}
-    return {"text": f"{_prefix(card)}: {text}", "source": "vultr", "model": cfg.model}
-
-
-def _start(card: Mapping, env: Optional[Mapping[str, str]]):
-    """(config, cache key, text or None, go) — go is False when Vultr must not be called."""
-    cfg = VultrConfig.from_env(env)
-    if not cfg.enabled:
-        return cfg, None, None, False
-    key = _key(card, cfg)
-    hit = _cached(key)
-    if hit is not None:
-        return cfg, key, hit, False
-    return cfg, key, None, not _cooling_down()
 
 
 def _headers(cfg: VultrConfig) -> dict:
@@ -375,49 +242,11 @@ def _timeout(cfg: VultrConfig) -> httpx.Timeout:
     return httpx.Timeout(cfg.timeout_s, connect=min(cfg.timeout_s, 3.0))
 
 
-def briefing(card: Mapping, *, env: Optional[Mapping[str, str]] = None,
-             transport: Optional[httpx.BaseTransport] = None) -> dict:
-    """{text, source: 'vultr' | 'template', model}. Blocking; never raises.
-
-    From async code use `await abriefing(card)` (or asyncio.to_thread): the KAZE
-    timer worker shares the event loop and must never wait on this call.
-    """
+async def _call(task: str, facts: Facts, cfg: VultrConfig, key: str,
+                transport: Optional[httpx.AsyncBaseTransport]) -> Optional[GeneratedText]:
+    """One Vultr request (one retry on 429/5xx) and the filter. None means "use the template"."""
     try:
-        cfg, key, text, go = _start(card, env)
-        if not go:
-            return _result(card, text, cfg)
-        body = request_body(card, cfg)
-        with httpx.Client(base_url=cfg.base_url, timeout=_timeout(cfg), transport=transport) as client:
-            for attempt in (1, 2):
-                r = client.post("/chat/completions", json=body, headers=_headers(cfg))
-                if r.status_code in RETRY_STATUS and attempt == 1:
-                    time.sleep(random.uniform(0.3, 0.8))
-                    continue
-                break
-        if r.status_code != 200:
-            _failed(f"HTTP {r.status_code}")
-            return _result(card, None, cfg)
-        text = accept_text(r.json(), facts_for_model(card))
-        _remember(key, text)
-        return _result(card, text, cfg)
-    except BriefingRejected as exc:  # the endpoint works; this card gets the template
-        log.warning("vultr briefing rejected (%s); using the template for this card", exc)
-        _remember(key, "")
-    except (httpx.HTTPError, ValueError) as exc:  # transport errors, bad JSON
-        _failed(type(exc).__name__)
-    except Exception as exc:  # pragma: no cover - never let a briefing break the page
-        _failed(type(exc).__name__)
-    return {"text": template_briefing(card), "source": "template", "model": None}
-
-
-async def abriefing(card: Mapping, *, env: Optional[Mapping[str, str]] = None,
-                    transport: Optional[httpx.AsyncBaseTransport] = None) -> dict:
-    """Async twin of briefing(): same result, never blocks the event loop, never raises."""
-    try:
-        cfg, key, text, go = _start(card, env)
-        if not go:
-            return _result(card, text, cfg)
-        body = request_body(card, cfg)
+        body = request_body(task, facts, cfg)
         async with httpx.AsyncClient(base_url=cfg.base_url, timeout=_timeout(cfg), transport=transport) as client:
             for attempt in (1, 2):
                 r = await client.post("/chat/completions", json=body, headers=_headers(cfg))
@@ -427,30 +256,39 @@ async def abriefing(card: Mapping, *, env: Optional[Mapping[str, str]] = None,
                 break
         if r.status_code != 200:
             _failed(f"HTTP {r.status_code}")
-            return _result(card, None, cfg)
-        text = accept_text(r.json(), facts_for_model(card))
+            return None
+        text = accept_text(r.json(), facts)
         _remember(key, text)
-        return _result(card, text, cfg)
-    except BriefingRejected as exc:
-        log.warning("vultr briefing rejected (%s); using the template for this card", exc)
+        return text
+    except TextRejected as exc:  # the endpoint works; these facts get the template
+        log.warning("vultr text rejected (%s); using the template for these facts", exc)
         _remember(key, "")
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx.HTTPError, ValueError) as exc:  # transport errors, bad JSON
         _failed(type(exc).__name__)
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover - never let the wording break the page
         _failed(type(exc).__name__)
-    return {"text": template_briefing(card), "source": "template", "model": None}
+    return None
 
 
-def briefing_text(card: dict, *, env: Optional[Mapping[str, str]] = None,
-                  transport: Optional[httpx.BaseTransport] = None) -> str:
-    """Shared PCC contract: Vultr wording when VULTR_API_KEY is set, else (or on any error
-    or timeout) template_briefing(card). Blocking; async callers use abriefing_text."""
-    return briefing(card, env=env, transport=transport)["text"]
+async def agenerate(task: str, facts: Facts, *, env: Optional[Mapping[str, str]] = None,
+                    transport: Optional[httpx.AsyncBaseTransport] = None) -> dict:
+    """{text: GeneratedText, source: 'vultr' | 'template', model}. Never blocks the event loop.
 
-
-async def abriefing_text(card: dict, *, env: Optional[Mapping[str, str]] = None,
-                         transport: Optional[httpx.AsyncBaseTransport] = None) -> str:
-    return (await abriefing(card, env=env, transport=transport))["text"]
+    Transport failures and rejected replies never raise; they give the template. An unknown task raises
+    ValueError, and facts without a matching labels.json template raise TemplateMissing, as in the chain.
+    """
+    if task not in contract.TASKS:
+        raise ValueError(f"unknown task {task!r}")
+    cfg = VultrConfig.from_env(env)
+    text: Optional[Union[GeneratedText, str]] = None
+    if cfg.enabled:
+        key = _key(task, facts, cfg)
+        text = _cached(key)
+        if text is None and not _cooling_down():
+            text = await _call(task, facts, cfg, key, transport)
+    if not text:  # None: not called or failed; "": these facts' model text was rejected
+        return {"text": template(task, facts), "source": "template", "model": None}
+    return {"text": text, "source": "vultr", "model": cfg.model}
 
 
 def main() -> int:

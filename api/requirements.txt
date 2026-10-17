@@ -5,30 +5,15 @@ psycopg[binary,pool]==3.3.6
 psycopg-pool==3.3.3
 httpx==0.28.1
 pydantic==2.14.1
-qrcode==8.2
-pypng==0.20220715.0
 cryptography==50.0.2
 python-dotenv==1.2.4
 tzdata==2026.5
 
-# Ops: scripts/bridge.py talks to the scrunchie over USB serial. Optional; the
-# server and the tests run without it (bridge.py --stdin needs no pyserial).
-pyserial==3.5
-
-# Heart-rate bridges on the demo laptop (research 1.14). Optional; the server and the tests run
-# without them. scripts/hr_bleak.py (HeartCast over Bluetooth) needs bleak, which is macOS-only
-# here; scripts/hr_pulsoid.py needs websockets (also pulled in by uvicorn[standard]).
-bleak==3.0.2; sys_platform == "darwin"
-websockets==17.2
-
 # Tests
 pytest==9.1.1
 pytest-asyncio==1.4.0
-# Property-based tests (tests/test_property_*.py).
 hypothesis==6.170.1
-# Browser tests (tests/test_browser_pages.py) drive the installed Google Chrome (channel="chrome"); no
-# browser download, never `playwright install`. They skip when Chrome cannot be launched.
 playwright==1.64.0
-# Local Postgres for the integration tests (no system install). Optional:
-# set STILLHERE_TEST_PG_URI to use another server instead.
+# Local Postgres for the database tests (no system install). Optional: set RB_TEST_PG_URI to use another
+# server instead (CI: a postgres:16 service container).
 pgserver==0.1.4

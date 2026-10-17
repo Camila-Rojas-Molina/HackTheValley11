@@ -1,9 +1,9 @@
-"""Start the StillHere server: one process, no reloader, so the listener is this process.
+"""Start the RainbowBone API: one process, no reloader, so the listener is this process.
 
-    python scripts/run.py            (from backend/; serve.sh runs it in a restart loop)
+    .venv/bin/python api/scripts/run.py          (from the repo root; it changes into api/)
 
 Env: HOST (default 0.0.0.0), PORT (default 8000), LOG_LEVEL (default info), plus
-everything the app reads (backend/.env is loaded by app.main).
+everything the app reads (api/.env is loaded by app.main; api/.env.example lists the names).
 
 Windows: uvicorn's default loop there is ProactorEventLoop, which psycopg's async
 mode does not support. We set the selector policy and pass loop="none" so
@@ -16,13 +16,13 @@ import os
 import sys
 from pathlib import Path
 
-BACKEND = Path(__file__).resolve().parent.parent
+API_DIR = Path(__file__).resolve().parent.parent
 
 
 def main() -> None:
-    os.chdir(BACKEND)
-    if str(BACKEND) not in sys.path:
-        sys.path.insert(0, str(BACKEND))
+    os.chdir(API_DIR)
+    if str(API_DIR) not in sys.path:
+        sys.path.insert(0, str(API_DIR))
     import uvicorn
 
     loop = "auto"
