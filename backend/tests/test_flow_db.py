@@ -547,3 +547,19 @@ async def test_prompt_shown_starts_the_deadline_and_stale_heartbeats_do_not_exte
         lease2 = (await (await conn.execute("SELECT lease_expires_at FROM devices WHERE id = %s",
                                             (w.device_id,))).fetchone())["lease_expires_at"]
     assert lease2 == lease1  # a replayed seq does not keep the link alive
+
+
+async def test_session_end_during_an_alert_still_asks_home_safe_afterwards(client, db, ctx):
+    w = await make_world(client, db, arm=False)
+    r = await client.post("/v1/sessions", json={"profile": "demo", "duration_s": 30}, headers=w.wearer)
+    w.session_id = r.json()["session_id"]
+    await to_state(client, db, ctx, w, "ESCALATED_L1")
+    # The preset end time passes while the alert is open: it waits instead of being dropped.
+    assert await fire(db, ctx, w.session_id, states.SESSION_END_DUE) == "deferred"
+    assert states.SESSION_END_DUE in [t["kind"] for t in await pending_timers(db, w.session_id)]
+    c1 = w.contacts[0]
+    await client.post(f"/v1/contact/{c1['token']}/ack")
+    assert (await client.post(f"/v1/contact/{c1['token']}/followup", json={"action": "safe"})).json()["result"] == "resolved"
+    assert (await session_row(db, w.session_id))["state"] == states.ARMED
+    assert await fire(db, ctx, w.session_id, states.SESSION_END_DUE) == "prompted"
+    assert [o["text"] for o in await outbox(db, w.session_id, recipient="wearer")][-1] == "Home safe?"

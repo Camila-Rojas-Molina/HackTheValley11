@@ -421,7 +421,8 @@ def _on_session_end_due(snap: Snapshot, d: Decision) -> None:
     if snap.state == ARMED:
         _enter_prompt(snap, d, PROMPTED, "session_end", ROUTINE_K, "home_safe")
         d.audit.append(AuditEntry("session_end_due", {}))
-    elif snap.state in PROMPT_STATES:
+    elif snap.state in PROMPT_STATES or is_alerting(snap.state):
+        # Not now: ask "Home safe?" once the current prompt or alert is over.
         d.timers.append(TimerSpec(SESSION_END_DUE, _window(snap) + snap.timings.delivery_grace_s))
         d.reply = "deferred"
     else:
