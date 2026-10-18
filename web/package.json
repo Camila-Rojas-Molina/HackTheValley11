@@ -11,6 +11,7 @@
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@niivue/niivue": "0.69.0",
     "class-variance-authority": "0.7.1",
     "cn": "0.5.0",
     "lucide-react": "1.59.0",
@@ -28,6 +29,7 @@
     "@types/react-dom": "19.3.0",
     "eslint": "9.39.5",
     "eslint-config-next": "16.4.2",
+    "puppeteer-core": "24.43.1",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3"
   }

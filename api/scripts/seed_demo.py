@@ -62,6 +62,8 @@ LADDER_CM3 = {
 }
 # The Day-273 L1 crop at 1 mm: 3,217 lesion voxels and 67,790 vertebra voxels of 1 mm3 each.
 L1_D273_CROP_MM3 = {"lesion": 3217.0, "vertebra": 67790.0}
+# The Day-0 L1 crop at 1 mm (spike R0, same crop.py; demo/PROVENANCE.json): 0 lesion voxels, 69,376 vertebra voxels.
+L1_D0_CROP_MM3 = {"lesion": 0.0, "vertebra": 69376.0}
 
 CT_SCALES = [
     {"layer": "ct", "colormap": "gray", "cal_min": -500.0, "cal_max": 1500.0, "unit": None, "display": "window",
@@ -79,8 +81,8 @@ def _labels() -> dict:
     return json.loads((root / "labels.json").read_text(encoding="utf-8"))
 
 
-def _ready(nbytes: int, sha: str) -> dict:
-    return {"status": "ready", "bytes": nbytes, "sha256": sha, "basis": "measured", "available_in": None}
+def _ready(nbytes: int, sha: str, basis: str = "measured") -> dict:
+    return {"status": "ready", "bytes": nbytes, "sha256": sha, "basis": basis, "available_in": None}
 
 
 def _pending(milestone: str, basis: str = "pending") -> dict:
@@ -109,10 +111,10 @@ def scans() -> list[dict]:
         "mask_lesion.expert.nii.gz": _ready(2375, "163103d9f49ec3af765b94adf563a83c258ecfd46aab34512534fe1b343dae38"),
         **_computed_files(with_context=True),
     }
-    d0_files = {  # the Day-0 crop joins the demo bundle in M3 (spike R0 made it; S2 bundles it)
-        "ct.nii.gz": _pending("M3", "measured"),
-        "mask_vertebra.expert.nii.gz": _pending("M3", "measured"),
-        "mask_lesion.expert.nii.gz": _pending("M3", "measured"),
+    d0_files = {  # spike R0's Day-0 crop, bundled by S2 in demo/myel018-L1-d0 (demo/PROVENANCE.json)
+        "ct.nii.gz": _ready(1120634, "544fe5a2ba2413c8439bf9d8665f9ce9de26314b3b9622bddf54fd5afa1851e4"),
+        "mask_vertebra.expert.nii.gz": _ready(8563, "748d247cce07218c847014d4062efae451459f52f3bc67b8a06d9d939d5cab4c"),
+        "mask_lesion.expert.nii.gz": _ready(943, "18bab9992d887d882e900fe197473f6402babd1e269771c21e27bd107207174f"),
         **_computed_files(with_context=False),
     }
     common = {"patient_id": PATIENT, "level": "L1", "provenance": "real_scan", "generator_version": None,
@@ -122,7 +124,11 @@ def scans() -> list[dict]:
         {**common, "scan_id": "myel018-L1-d0", "acquisition_id": "myel018-a", "day": 0, "label": "Day 0",
          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.163416561557440954759359029287186276821",
          "series_description": "Myel_018_a_konv", "source_shape": [512, 512, 1021],
-         "source_spacing_mm": [0.883, 0.883, 0.6], "grid": None, "files": d0_files,
+         "source_spacing_mm": [0.883, 0.883, 0.6],
+         "grid": {"shape": [95, 110, 80], "spacing_mm": [1.0, 1.0, 1.0],
+                  "affine": [[-1.0, 0.0, 0.0, 50.186], [0.0, -1.0, 0.0, -131.024], [0.0, 0.0, 1.0, -641.44],
+                             [0.0, 0.0, 0.0, 1.0]], "margin_mm": 10.0, "dtype": "int16"},
+         "files": d0_files,
          "source": "demo/myel018-L1-d0"},
         {**common, "scan_id": "myel018-L1-d273", "acquisition_id": "myel018-b", "day": 273, "label": "Day 273",
          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.214314532294190421148158394502115174580",
@@ -140,9 +146,12 @@ def scans() -> list[dict]:
          "grid": {"shape": [96, 96, 128], "spacing_mm": [1.0, 1.0, 1.0],
                   "affine": [[1.0, 0.0, 0.0, -48.0], [0.0, 1.0, 0.0, -48.0], [0.0, 0.0, 1.0, -64.0],
                              [0.0, 0.0, 0.0, 1.0]], "margin_mm": None, "dtype": "int16"},
-         "files": {"ct.nii.gz": _pending("M3", "mock"),
-                   "strain_min_principal_ue.mock.nii.gz": _pending("M3", "mock"),
-                   "strain_min_principal_ue.mock.mz3": _pending("M3", "mock")},
+         "files": {  # demo/phantom (demo/PROVENANCE.json): synthetic CT and a mock strain field
+             "ct.nii.gz": _ready(1321186, "9c035f24c27be8c04dfb1acc5056c69ff688314ed7074506fd20e79c0652aea5", "mock"),
+             "strain_min_principal_ue.mock.nii.gz":
+                 _ready(48721, "52e928239f966ffd90d8112a68527436a1dbdcc3ded23198e8bd86d452bed177", "mock"),
+             "strain_min_principal_ue.mock.mz3":
+                 _ready(227072, "8d6d3c3daec21545915afcd0e3507ce6b5951d63a3916345817ea7d6b09e8d09", "mock")},
          "calibration": None,
          "registration": {"status": "not_registered", "fixed_scan_id": None, "method": None, "available_in": None},
          "mask_sources": {"vertebra": None, "body": None, "lesion": None, "body_split_method": None,
@@ -163,6 +172,8 @@ def metric_rows() -> list[dict]:
                          "vertebra_volume_mm3": round(vert * 1000.0, 3)})
     rows.append({"day": 273, "site": "L1", "scan_id": "myel018-L1-d273", "lesion_grid": "crop_1mm",
                  "lesion_volume_mm3": L1_D273_CROP_MM3["lesion"], "vertebra_volume_mm3": L1_D273_CROP_MM3["vertebra"]})
+    rows.append({"day": 0, "site": "L1", "scan_id": "myel018-L1-d0", "lesion_grid": "crop_1mm",
+                 "lesion_volume_mm3": L1_D0_CROP_MM3["lesion"], "vertebra_volume_mm3": L1_D0_CROP_MM3["vertebra"]})
     return rows
 
 

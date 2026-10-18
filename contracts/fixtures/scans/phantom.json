@@ -86,10 +86,10 @@
       "field": null,
       "basis": "mock",
       "provenance": "synthetic_insilico",
-      "status": "pending",
-      "available_in": "M3",
-      "bytes": null,
-      "sha256": null
+      "status": "ready",
+      "available_in": null,
+      "bytes": 1321186,
+      "sha256": "9c035f24c27be8c04dfb1acc5056c69ff688314ed7074506fd20e79c0652aea5"
     },
     {
       "name": "strain_min_principal_ue.mock.nii.gz",
@@ -100,10 +100,10 @@
       "field": "strain_min_principal_ue",
       "basis": "mock",
       "provenance": "synthetic_insilico",
-      "status": "pending",
-      "available_in": "M3",
-      "bytes": null,
-      "sha256": null
+      "status": "ready",
+      "available_in": null,
+      "bytes": 48721,
+      "sha256": "52e928239f966ffd90d8112a68527436a1dbdcc3ded23198e8bd86d452bed177"
     },
     {
       "name": "strain_min_principal_ue.mock.mz3",
@@ -114,10 +114,10 @@
       "field": "strain_min_principal_ue",
       "basis": "mock",
       "provenance": "synthetic_insilico",
-      "status": "pending",
-      "available_in": "M3",
-      "bytes": null,
-      "sha256": null
+      "status": "ready",
+      "available_in": null,
+      "bytes": 227072,
+      "sha256": "8d6d3c3daec21545915afcd0e3507ce6b5951d63a3916345817ea7d6b09e8d09"
     }
   ],
   "color_scales": [

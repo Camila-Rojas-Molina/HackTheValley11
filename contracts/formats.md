@@ -50,6 +50,7 @@ gzip of: header `<HHIII`: magic 23117, attr = 1 (faces) | 2 (vertices) | 8 (scal
 - `scope: "patient_level"`: **identical for every timepoint of one patient and level**, so "redder" means the same thing on Day 0 and Day 273. S3 fixes the strain range from the baseline run in M5 and records it in the scan rows; it does not change per scan.
 - CT: `gray`, window −500…1500 HU. Lesion mask: `red` label, opacity 0.6. Vertebra mask: `green` label, opacity 0.15.
 - Strain: `turbo`, `display: "magnitude"`, cal_min 0. The phantom's mock field uses 0–1500 µε (S2 generates the mock inside that range).
+- **Stored as magnitude.** A `strain_min_principal_ue` volume (`.nii.gz`) or surface (`.mz3`) stores −ε_min ≥ 0 in µε, the magnitude, not the signed value: the viewer passes `cal_min`/`cal_max` to NiiVue as they are, and NiiVue draws nothing below `cal_min`. The database keeps the signed value (negative is compressive, `db.md`). S3's export test asserts min ≥ 0 on every written strain file (M5).
 
 ## `metrics.json` and the manifest
 - The manifest is `GET /api/v1/scans/{scan_id}` (`ScanManifest` in `api/app/schemas.py`); the pipeline also writes it as `manifest.json`. `schema: "rb.manifest/1"`.

@@ -166,5 +166,5 @@ async def test_two_lesion_grids_in_one_month_stay_two_aggregate_rows_and_the_see
     finally:
         await c.close()
     assert [(r["bucket"].strftime("%Y-%m"), r["lesion_grid"], r["n"]) for r in rows] == [
-        ("2026-01", "original", 1), ("2026-10", "crop_1mm", 1), ("2026-10", "original", 1)]
-    assert rows[2]["v"] == 3240.0
+        ("2026-01", "crop_1mm", 1), ("2026-01", "original", 1), ("2026-10", "crop_1mm", 1), ("2026-10", "original", 1)]
+    assert rows[3]["v"] == 3240.0

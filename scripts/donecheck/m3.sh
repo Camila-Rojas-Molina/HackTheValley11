@@ -28,7 +28,7 @@ page() {  # path -> row for the web page answering 200 (the first load compiles 
   local code; code="$(http_code "$WEB$1" 180)"
   [ "$code" = "200" ] && row PASS "GET $1 (web)  -> 200" "$code" || row FAIL "GET $1 (web)  -> 200" "$code"
 }
-manifest() {  # scan id, then one query: metric <key> <grid|*> <field> | registration | mock_assets
+manifest() {  # scan id, then one query: metric <key> <grid|*> <field> | registration | mock_assets | asset_status <name>
   local id="$1"; shift
   curl -s --max-time 15 "$API/api/v1/scans/$id" | "$PY" -c '
 import json, sys
@@ -38,8 +38,11 @@ if q[0] == "metric":
     print(hit[0].get(q[3]) if hit else "")
 elif q[0] == "registration":
     print((m.get("registration") or {}).get("status", ""))
-elif q[0] == "mock_assets":
-    print(" ".join(sorted(a.get("name", "") for a in m.get("assets", []) if ".mock." in a.get("name", ""))))' "$@" 2>/dev/null
+elif q[0] == "mock_assets":  # only the ones the viewer can draw
+    print(" ".join(sorted(a.get("name", "") for a in m.get("assets", [])
+                          if ".mock." in a.get("name", "") and a.get("status") == "ready")))
+elif q[0] == "asset_status":
+    print(next((a.get("status", "") for a in m.get("assets", []) if a.get("name") == q[1]), ""))' "$@" 2>/dev/null
 }
 if [ "$STOP" = 1 ]; then trap 'scripts/dev.sh stop >/dev/null 2>&1' EXIT; fi
 
@@ -76,14 +79,17 @@ v="$(manifest myel018-L1-d0 metric lesion_volume_cm3 original value)"
 v="$(manifest myel018-L1-d0 registration)"
 [ "$v" = "not_registered" ] && row PASS "API d0 registration.status  -> not_registered" "$v" \
                             || row FAIL "API d0 registration.status  -> not_registered" "${v:-no value}"
+v="$(manifest myel018-L1-d0 asset_status ct.nii.gz)"
+[ "$v" = "ready" ] && row PASS "API d0 ct.nii.gz  -> ready (the Day 0 panel draws a CT)" "$v" \
+                   || row FAIL "API d0 ct.nii.gz  -> ready (the Day 0 panel draws a CT)" "${v:-no asset}"
 eyes "the Day 0 panel shows 0.00 cm³ and no outline, labelled \"not yet registered (M5)\""
 
 # 4. /scan/phantom: Turbo strain overlay with the legend "Compressive strain (µε) · MOCK"; a 3D cut-away
 page "/scan/phantom"
 v="$(manifest phantom mock_assets)"
 case "$v" in
-  *"strain_min_principal_ue.mock.nii.gz"*) row PASS "API phantom assets  -> strain_min_principal_ue.mock.nii.gz (MOCK)" "$v" ;;
-  *) row FAIL "API phantom assets  -> strain_min_principal_ue.mock.nii.gz (MOCK)" "${v:-none}" ;;
+  *"strain_min_principal_ue.mock.nii.gz"*) row PASS "API phantom ready assets  -> strain_min_principal_ue.mock.nii.gz (MOCK)" "$v" ;;
+  *) row FAIL "API phantom ready assets  -> strain_min_principal_ue.mock.nii.gz (MOCK)" "${v:-none ready}" ;;
 esac
 eyes "$WEB/scan/phantom: a Turbo strain overlay on the slices with the legend \"Compressive strain (µε) · MOCK\"; the 3D view shows a cut-away"
 

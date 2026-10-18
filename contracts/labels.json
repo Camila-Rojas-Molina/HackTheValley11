@@ -62,7 +62,9 @@
     "offline_badge": "offline · fixtures",
     "simulated_badge": "SIMULATED",
     "timeline_legend": "Illustrative growth simulated from real scans A and B, not patient data",
-    "day_label": "Day {day}"
+    "day_label": "Day {day}",
+    "surface_toggle": ".mz3 surface layer (3D)",
+    "demo_case_label": "Myel_018 · L1"
   },
   "calibration": {
     "label": "phantomless, adapted from a leg-region method (Eggermont 2019), unvalidated on spine",

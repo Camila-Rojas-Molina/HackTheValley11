@@ -160,8 +160,9 @@ def _hand_cases() -> list[Case]:
         Case("asset-pending", "get_scan_asset", "GET",
              f"{API_PREFIX}/scans/myel018-L1-d273/assets/strain_min_principal_ue.expert.nii.gz", 501,
              {"detail": "lands in M5", "available_in": "M5"}),
-        Case("asset-pending-d0", "get_scan_asset", "GET", f"{API_PREFIX}/scans/myel018-L1-d0/assets/ct.nii.gz",
-             501, {"detail": "lands in M3", "available_in": "M3"}),
+        Case("asset-pending-d0", "get_scan_asset", "GET",
+             f"{API_PREFIX}/scans/myel018-L1-d0/assets/mask_body.expert.nii.gz", 501,
+             {"detail": "lands in M5", "available_in": "M5"}),
     ]
 
 
@@ -292,3 +293,36 @@ async def test_docs_pages(client, path):
     r = await client.get(path)
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
+
+
+# contracts/formats.md "Media types", written out here so the check does not reuse app.storage's own table.
+FORMATS_MEDIA_TYPES = {".nii.gz": "application/gzip", ".mz3": "application/octet-stream"}
+DEMO_SCANS = ["myel018-L1-d273", "myel018-L1-d0", "phantom"]
+
+
+@pytest.mark.parametrize("scan_id", DEMO_SCANS)
+async def test_every_ready_demo_asset_url_serves_the_bundle_file(app, client, scan_id):
+    """PLAN M3: every manifest URL of the seeded demo scans returns 200 with the formats.md media type and the
+    bytes the manifest names, read from the committed demo/ bundle; nothing in them still waits on M3."""
+    import dataclasses
+    import hashlib
+
+    from app.config import REPO_ROOT
+
+    m = (await client.get(f"{API_PREFIX}/scans/{scan_id}")).json()
+    assert [a["name"] for a in m["assets"] if a.get("available_in") == "M3"] == []
+    assert [x["key"] for x in m["metrics"] if x.get("available_in") == "M3"] == []
+    ready = [a for a in m["assets"] if a["status"] == "ready"]
+    assert ready, f"{scan_id}: no ready asset"
+    old = app.state.settings
+    app.state.settings = dataclasses.replace(old, demo_dir=REPO_ROOT / "demo")
+    try:
+        for a in ready:
+            want = next(t for ext, t in FORMATS_MEDIA_TYPES.items() if a["name"].endswith(ext))
+            r = await client.get(a["url"])
+            assert r.status_code == 200, (a["url"], r.text[:200])
+            assert r.headers["content-type"] == want == a["media_type"], a["url"]
+            assert len(r.content) == a["bytes"], a["url"]
+            assert hashlib.sha256(r.content).hexdigest() == a["sha256"], a["url"]
+    finally:
+        app.state.settings = old

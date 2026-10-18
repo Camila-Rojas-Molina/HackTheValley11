@@ -41,6 +41,21 @@ D273_FILES = {
 }
 L1_AFFINE_D273 = [[-1.0, 0.0, 0.0, 62.875], [0.0, -1.0, 0.0, -122.744], [0.0, 0.0, 1.0, -568.673],
                   [0.0, 0.0, 0.0, 1.0]]
+# M3: the demo bundle (demo/PROVENANCE.json, S2). Day 0 = spike R0's L1 crop of scan A (same crop.py, 10 mm margin);
+# the phantom CT and its mock strain field are synthetic.
+D0_FILES = {
+    "ct.nii.gz": (1120634, "544fe5a2ba2413c8439bf9d8665f9ce9de26314b3b9622bddf54fd5afa1851e4"),
+    "mask_vertebra.expert.nii.gz": (8563, "748d247cce07218c847014d4062efae451459f52f3bc67b8a06d9d939d5cab4c"),
+    "mask_lesion.expert.nii.gz": (943, "18bab9992d887d882e900fe197473f6402babd1e269771c21e27bd107207174f"),
+}
+L1_AFFINE_D0 = [[-1.0, 0.0, 0.0, 50.186], [0.0, -1.0, 0.0, -131.024], [0.0, 0.0, 1.0, -641.44],
+                [0.0, 0.0, 0.0, 1.0]]
+L1_D0_CROP_VOXELS = {"lesion": 0, "vertebra": 69376}   # 1 mm3 each
+PHANTOM_FILES = {
+    "ct.nii.gz": (1321186, "9c035f24c27be8c04dfb1acc5056c69ff688314ed7074506fd20e79c0652aea5"),
+    "strain_min_principal_ue.mock.nii.gz": (48721, "52e928239f966ffd90d8112a68527436a1dbdcc3ded23198e8bd86d452bed177"),
+    "strain_min_principal_ue.mock.mz3": (227072, "8d6d3c3daec21545915afcd0e3507ce6b5951d63a3916345817ea7d6b09e8d09"),
+}
 LADDER = {  # level: (lesion_d0, vert_d0, lesion_d273, vert_d273), cm3, original grid, expert masks
     "T11": (0.53, 62.18, 1.44, 61.12), "T12": (0.42, 64.00, 1.06, 64.52), "L1": (0.00, 69.24, 3.24, 68.52),
     "L2": (0.80, 71.76, 0.22, 71.60), "L3": (0.63, 78.69, 2.24, 78.66), "L4": (0.10, 77.88, 3.32, 77.31),
@@ -191,16 +206,20 @@ def manifests() -> dict[str, dict]:
                         "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.163416561557440954759359029287186276821",
                         "series_description": "Myel_018_a_konv", "modality": "CT", "kvp": 120,
                         "source_shape": [512, 512, 1021], "source_spacing_mm": [0.883, 0.883, 0.6]},
-        "grid": None,
-        "assets": [asset(d0, n, k, "measured", "real_scan", "pending", variant=v, available_in="M3")
+        "grid": {"shape": [95, 110, 80], "spacing_mm": [1.0, 1.0, 1.0], "affine": L1_AFFINE_D0,
+                 "margin_mm": 10, "dtype": "int16"},
+        "assets": [asset(d0, n, k, "measured", "real_scan", "ready", variant=v, size=D0_FILES[n][0],
+                         sha=D0_FILES[n][1])
                    for n, k, v in (("ct.nii.gz", "ct", None), ("mask_vertebra.expert.nii.gz", "mask_vertebra", "expert"),
                                    ("mask_lesion.expert.nii.gz", "mask_lesion", "expert"))]
         + [a for a in pend_assets_real(d0) if a["kind"] in ("mask_body", "strain_volume", "strain_surface", "stl")],
         "metrics": [
             metric("lesion_volume_cm3", 0.0, "cm3", "measured", grid="original", mask_source="expert"),
-            pending("lesion_volume_cm3", "cm3", "M3", grid="crop_1mm", mask_source="expert"),
+            metric("lesion_volume_cm3", round(L1_D0_CROP_VOXELS["lesion"] / 1000.0, 2), "cm3", "measured",
+                   grid="crop_1mm", mask_source="expert", note=f"{L1_D0_CROP_VOXELS['lesion']:,} voxels at 1 mm"),
             metric("vertebra_volume_cm3", 69.24, "cm3", "measured", grid="original", mask_source="expert"),
-            pending("vertebra_volume_cm3", "cm3", "M3", grid="crop_1mm", mask_source="expert"),
+            metric("vertebra_volume_cm3", round(L1_D0_CROP_VOXELS["vertebra"] / 1000.0, 2), "cm3", "measured",
+                   grid="crop_1mm", mask_source="expert"),
             metric("lesion_pct_of_vertebra", 0.0, "pct", "measured", grid="original", mask_source="expert"),
             pending("body_volume_cm3", "cm3", "M5", grid="crop_1mm", mask_source="expert"),
             pending("strain_p99_lesion_ue", "ue", "M5", mask_source="expert", lesion_model="weak_bone",
@@ -223,11 +242,11 @@ def manifests() -> dict[str, dict]:
         "mask_sources": {"vertebra": None, "body": None, "lesion": None, "body_split_method": None,
                          "caption": LABELS["viewer"]["phantom_label"]},
         "assets": [
-            asset("phantom", "ct.nii.gz", "ct", "mock", "synthetic_insilico", "pending", available_in="M3"),
-            asset("phantom", "strain_min_principal_ue.mock.nii.gz", "strain_volume", "mock", "synthetic_insilico",
-                  "pending", variant="mock", field="strain_min_principal_ue", available_in="M3"),
-            asset("phantom", "strain_min_principal_ue.mock.mz3", "strain_surface", "mock", "synthetic_insilico",
-                  "pending", variant="mock", field="strain_min_principal_ue", available_in="M3"),
+            asset("phantom", n, k, "mock", "synthetic_insilico", "ready", variant=v, field=f,
+                  size=PHANTOM_FILES[n][0], sha=PHANTOM_FILES[n][1])
+            for n, k, v, f in (("ct.nii.gz", "ct", None, None),
+                               ("strain_min_principal_ue.mock.nii.gz", "strain_volume", "mock", "strain_min_principal_ue"),
+                               ("strain_min_principal_ue.mock.mz3", "strain_surface", "mock", "strain_min_principal_ue"))
         ],
         "color_scales": [
             {**common_scales[0], "scope": "scan", "basis": "mock"},
@@ -263,7 +282,7 @@ def flag_pending() -> dict:
 
 def scan_ref(sid, label, day, time) -> dict:
     return {"scan_id": sid, "patient_id": "demo-a", "level": "L1", "day": day, "time": time, "label": label,
-            "provenance": "real_scan", "simulated": False, "status": "ready" if day == 273 else "pending",
+            "provenance": "real_scan", "simulated": False, "status": "ready",
             "has_strain": False}
 
 

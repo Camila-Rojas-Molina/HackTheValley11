@@ -21,6 +21,8 @@ Data: Nohel et al. 2026, Spinal-Multiple-Myeloma-SEG, TCIA, DOI 10.7937/k4qv-hh7
 Hack the Valley 11 build, in milestones. **M1:** the module layout, frozen contracts, typed pipeline stubs, AI
 interfaces with a template-only chain and per-stream CI. **M2:** database-backed routes, the rb_ migrations and
 Tiger schema (tested on throwaway local databases only; Tiger Cloud after G1), the jobs queue and the audit chain.
+**M3:** `/scan/<id>`, a 2×2 NiiVue view of the real Myel_018 L1 crops (Day 0 and Day 273 side by side), the
+synthetic phantom with a mock strain field, an offline mode on the fixtures, and `demo/` with its attribution and provenance.
 Segmentation, finite-element physics, live AI calls and deployment arrive after the team's Step 1 review (G1).
 The StillHere code this repo held before is kept at the tag `stillhere-final`.
 

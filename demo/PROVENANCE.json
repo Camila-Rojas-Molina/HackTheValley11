@@ -1,0 +1,259 @@
+{
+  "schema": "rb.demo-provenance/1",
+  "about": "Every file in demo/ except this one: its sha256 and size, the script that made it, whether it is measured or mock, and its provenance (contracts/formats.md, Demo bundle). Paths are relative to demo/. Scripts and source files live in RB_DATA_DIR, outside the repo; each demo file is a byte-for-byte copy of its source. pipeline/tests/test_demo_bundle.py checks this file.",
+  "status_line": "Research prototype on public, de-identified data. Not a medical device. Not for clinical use or diagnosis.",
+  "attribution": "ATTRIBUTION.md",
+  "scripts": {
+    "RB_DATA_DIR/spikes/data-scripts/crop.py": {
+      "what": "Crops one level from the full-scan NIfTIs: the level's vertebra label plus a 10 mm margin, resampled to 1.0 mm isotropic (CT linear, masks nearest-neighbour). The lesion mask is the dataset lesion map restricted to the vertebra mask.",
+      "command": "crop.py <dir holding ct_, vertebrae_ and lesions_ NIfTIs of one scan> <scan date> 20 L1",
+      "upstream": [
+        "CT DICOM to NIfTI with SimpleITK (RB_DATA_DIR/spikes/data-scripts/ctnii.py; seg1.py writes the same file)",
+        "DICOM-SEG to label maps on the CT grid, highdicom combine_segments=True, resampled by physical coordinates with nearest-neighbour (RB_DATA_DIR/spikes/data-scripts/seg2.py)"
+      ],
+      "sha256": "2843c151d945eb12d75990ae8ec1ab16cfb2fb9ebd163a45ebdf9bb03a2f3912",
+      "bytes": 1815
+    },
+    "RB_DATA_DIR/demo-src/phantom/gen_data.py": {
+      "what": "Synthetic femur-shaft phantom for the viewer spike: a tube with a cortical shell, marrow and a spherical lytic defect, Gaussian noise with seed 0. No third-party data.",
+      "command": "gen_data.py <out_dir>",
+      "upstream": [],
+      "sha256": "0044d76399ee51cfe4b106fc985a1724611ad721abb7ccc9dacdc8c2c76e684b",
+      "bytes": 3514
+    },
+    "RB_DATA_DIR/demo-src/phantom/gen_mock_strain.py": {
+      "what": "MOCK strain field for the phantom: a fixed analytic formula (base level, side-to-side gradient, bump at the defect), not a finite-element result. Volume on the phantom CT grid; surface = the phantom's bone.mz3 mesh with the formula's values per vertex.",
+      "command": "gen_mock_strain.py RB_DATA_DIR/demo-src/phantom/ct.nii.gz RB_DATA_DIR/demo-src/phantom/bone.mz3 <out_dir>",
+      "upstream": [
+        "RB_DATA_DIR/demo-src/phantom/gen_data.py"
+      ],
+      "sha256": "c10aeafec9ceeefb80ed4e10de932ca0eda9d9f95d049a1c91fb1a84f9f1e711",
+      "bytes": 3782
+    }
+  },
+  "scans": {
+    "myel018-L1-d273": {
+      "label": "Day 273",
+      "dataset_case": "Myel_018",
+      "level": "L1",
+      "day": 273,
+      "provenance": "real_scan",
+      "simulated": false,
+      "acquisition": "scan B, conventional 120 kVp CT (Myel_018_b_konv)",
+      "series_instance_uid": {
+        "ct": "1.3.6.1.4.1.14519.5.2.1.214314532294190421148158394502115174580",
+        "seg_vertebrae": "1.3.6.1.4.1.14519.5.2.1.257428128843371487735314439957234593875",
+        "seg_lesions": "1.3.6.1.4.1.14519.5.2.1.25483162641653645522327199646747083869"
+      },
+      "mask_source": "expert",
+      "mask_caption": "outline: dataset radiologist-corrected mask",
+      "registration": "not_registered",
+      "registration_available_in": "M5",
+      "calibration": null,
+      "calibration_available_in": "M5",
+      "stiffness": "pending FE (M5)",
+      "measured": {
+        "lesion_voxels_crop_1mm": 3217,
+        "vertebra_voxels_crop_1mm": 67790,
+        "lesion_volume_cm3": [
+          {
+            "value": 3.24,
+            "grid": "original",
+            "source": "per_vertebra.json (seg2.py, native CT grid)",
+            "label": "3.24 cm³ (original scan grid; dataset radiologist-corrected mask)"
+          },
+          {
+            "value": 3.22,
+            "grid": "crop_1mm",
+            "source": "mask_lesion.expert.nii.gz in this folder",
+            "label": "3.22 cm³ (1 mm crop; 3,217 voxels)"
+          }
+        ],
+        "vertebra_volume_incl_lesion_cm3": [
+          {
+            "value": 68.52,
+            "grid": "original",
+            "source": "per_vertebra.json (seg2.py, native CT grid)"
+          },
+          {
+            "value": 67.79,
+            "grid": "crop_1mm",
+            "source": "mask_vertebra.expert.nii.gz in this folder"
+          }
+        ]
+      }
+    },
+    "myel018-L1-d0": {
+      "label": "Day 0",
+      "dataset_case": "Myel_018",
+      "level": "L1",
+      "day": 0,
+      "provenance": "real_scan",
+      "simulated": false,
+      "acquisition": "scan A, conventional 120 kVp CT (Myel_018_a_konv)",
+      "series_instance_uid": {
+        "ct": "1.3.6.1.4.1.14519.5.2.1.163416561557440954759359029287186276821",
+        "seg_vertebrae": "1.3.6.1.4.1.14519.5.2.1.93938506986181393993635473115678831219",
+        "seg_lesions": "1.3.6.1.4.1.14519.5.2.1.94188623099407603329809217350396187"
+      },
+      "mask_source": "expert",
+      "mask_caption": "outline: dataset radiologist-corrected mask",
+      "registration": "not_registered",
+      "registration_available_in": "M5",
+      "calibration": null,
+      "calibration_available_in": "M5",
+      "stiffness": "pending FE (M5)",
+      "note": "Spike R0 crop (crop.py unchanged; re-running it on scan B reproduced the Day-273 crop byte for byte). Its grid differs from Day 273 (95x110x80 vs 95x109x80, other origin): not registered.",
+      "measured": {
+        "lesion_voxels_crop_1mm": 0,
+        "vertebra_voxels_crop_1mm": 69376,
+        "lesion_volume_cm3": [
+          {
+            "value": 0.0,
+            "grid": "original",
+            "source": "per_vertebra.json (seg2.py, native CT grid)",
+            "label": "0.00 cm³ (original scan grid; dataset radiologist-corrected mask)"
+          },
+          {
+            "value": 0.0,
+            "grid": "crop_1mm",
+            "source": "mask_lesion.expert.nii.gz in this folder",
+            "label": "0.00 cm³ (1 mm crop; 0 voxels)"
+          }
+        ],
+        "vertebra_volume_incl_lesion_cm3": [
+          {
+            "value": 69.24,
+            "grid": "original",
+            "source": "per_vertebra.json (seg2.py, native CT grid)"
+          },
+          {
+            "value": 69.38,
+            "grid": "crop_1mm",
+            "source": "mask_vertebra.expert.nii.gz in this folder"
+          }
+        ]
+      }
+    },
+    "phantom": {
+      "label": "Synthetic phantom · mock strain field",
+      "dataset_case": null,
+      "level": null,
+      "day": null,
+      "provenance": "synthetic_insilico",
+      "simulated": true,
+      "acquisition": "none: synthetic femur-shaft phantom (generator phantom-femur-shaft/1, seed 0)",
+      "series_instance_uid": null,
+      "mask_source": null,
+      "mask_caption": "Synthetic phantom · mock strain field",
+      "registration": "not_registered",
+      "registration_available_in": null,
+      "calibration": null,
+      "calibration_available_in": null,
+      "stiffness": null,
+      "note": "Every strain value here is MOCK (an analytic formula, not FE), 0-1500 microstrain. Mock strain is shown on this phantom only, never on real anatomy.",
+      "measured": null
+    }
+  },
+  "files": [
+    {
+      "path": "myel018-L1-d273/ct.nii.gz",
+      "scan_id": "myel018-L1-d273",
+      "kind": "ct",
+      "sha256": "4ca90d8bb7dc061418def973dea8d04933c70dfd39ac01207f708a13a98468f1",
+      "bytes": 1111145,
+      "source_script": "RB_DATA_DIR/spikes/data-scripts/crop.py",
+      "basis": "measured",
+      "provenance": "real_scan",
+      "source": "RB_DATA_DIR/demo-src/myel018-L1-d273/L1_ct_1mm_*.nii.gz"
+    },
+    {
+      "path": "myel018-L1-d273/mask_vertebra.expert.nii.gz",
+      "scan_id": "myel018-L1-d273",
+      "kind": "mask_vertebra",
+      "sha256": "b22e99cd5dda3939f74779429f9206e73c241057a6b3ba23b3a8f9f327633f1d",
+      "bytes": 8367,
+      "source_script": "RB_DATA_DIR/spikes/data-scripts/crop.py",
+      "basis": "measured",
+      "provenance": "real_scan",
+      "source": "RB_DATA_DIR/demo-src/myel018-L1-d273/L1_mask_1mm_*.nii.gz"
+    },
+    {
+      "path": "myel018-L1-d273/mask_lesion.expert.nii.gz",
+      "scan_id": "myel018-L1-d273",
+      "kind": "mask_lesion",
+      "sha256": "163103d9f49ec3af765b94adf563a83c258ecfd46aab34512534fe1b343dae38",
+      "bytes": 2375,
+      "source_script": "RB_DATA_DIR/spikes/data-scripts/crop.py",
+      "basis": "measured",
+      "provenance": "real_scan",
+      "source": "RB_DATA_DIR/demo-src/myel018-L1-d273/L1_lesion_1mm_*.nii.gz"
+    },
+    {
+      "path": "myel018-L1-d0/ct.nii.gz",
+      "scan_id": "myel018-L1-d0",
+      "kind": "ct",
+      "sha256": "544fe5a2ba2413c8439bf9d8665f9ce9de26314b3b9622bddf54fd5afa1851e4",
+      "bytes": 1120634,
+      "source_script": "RB_DATA_DIR/spikes/data-scripts/crop.py",
+      "basis": "measured",
+      "provenance": "real_scan",
+      "source": "RB_DATA_DIR/demo-src/myel018-L1-d0/L1_ct_1mm_*.nii.gz"
+    },
+    {
+      "path": "myel018-L1-d0/mask_vertebra.expert.nii.gz",
+      "scan_id": "myel018-L1-d0",
+      "kind": "mask_vertebra",
+      "sha256": "748d247cce07218c847014d4062efae451459f52f3bc67b8a06d9d939d5cab4c",
+      "bytes": 8563,
+      "source_script": "RB_DATA_DIR/spikes/data-scripts/crop.py",
+      "basis": "measured",
+      "provenance": "real_scan",
+      "source": "RB_DATA_DIR/demo-src/myel018-L1-d0/L1_mask_1mm_*.nii.gz"
+    },
+    {
+      "path": "myel018-L1-d0/mask_lesion.expert.nii.gz",
+      "scan_id": "myel018-L1-d0",
+      "kind": "mask_lesion",
+      "sha256": "18bab9992d887d882e900fe197473f6402babd1e269771c21e27bd107207174f",
+      "bytes": 943,
+      "source_script": "RB_DATA_DIR/spikes/data-scripts/crop.py",
+      "basis": "measured",
+      "provenance": "real_scan",
+      "source": "RB_DATA_DIR/demo-src/myel018-L1-d0/L1_lesion_1mm_*.nii.gz"
+    },
+    {
+      "path": "phantom/ct.nii.gz",
+      "scan_id": "phantom",
+      "kind": "ct",
+      "sha256": "9c035f24c27be8c04dfb1acc5056c69ff688314ed7074506fd20e79c0652aea5",
+      "bytes": 1321186,
+      "source_script": "RB_DATA_DIR/demo-src/phantom/gen_data.py",
+      "basis": "mock",
+      "provenance": "synthetic_insilico",
+      "source": "RB_DATA_DIR/demo-src/phantom/ct.nii.gz"
+    },
+    {
+      "path": "phantom/strain_min_principal_ue.mock.nii.gz",
+      "scan_id": "phantom",
+      "kind": "strain_volume",
+      "sha256": "52e928239f966ffd90d8112a68527436a1dbdcc3ded23198e8bd86d452bed177",
+      "bytes": 48721,
+      "source_script": "RB_DATA_DIR/demo-src/phantom/gen_mock_strain.py",
+      "basis": "mock",
+      "provenance": "synthetic_insilico",
+      "source": "RB_DATA_DIR/demo-src/phantom/strain_min_principal_ue.mock.nii.gz"
+    },
+    {
+      "path": "phantom/strain_min_principal_ue.mock.mz3",
+      "scan_id": "phantom",
+      "kind": "strain_surface",
+      "sha256": "8d6d3c3daec21545915afcd0e3507ce6b5951d63a3916345817ea7d6b09e8d09",
+      "bytes": 227072,
+      "source_script": "RB_DATA_DIR/demo-src/phantom/gen_mock_strain.py",
+      "basis": "mock",
+      "provenance": "synthetic_insilico",
+      "source": "RB_DATA_DIR/demo-src/phantom/strain_min_principal_ue.mock.mz3"
+    }
+  ]
+}

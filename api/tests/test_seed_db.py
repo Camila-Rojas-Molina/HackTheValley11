@@ -22,7 +22,7 @@ def test_a_second_seed_changes_nothing(app, db_url):
     out = seed_demo.seed(db_url)
     assert out["audit_appended"] == []
     assert _counts(db_url) == before
-    assert before["patients"] == 1 and before["scans"] == 3 and before["scan_metrics"] == 15
+    assert before["patients"] == 1 and before["scans"] == 3 and before["scan_metrics"] == 16
 
 
 def test_seeded_rows_carry_their_provenance(app, db_url):
@@ -74,4 +74,4 @@ def test_a_restart_never_undoes_what_the_pipeline_wrote(pg_base_uri, monkeypatch
         n = c.execute("SELECT count(*) AS n FROM scan_metrics").fetchone()["n"]
     assert row["files"]["mask_body.expert.nii.gz"] == ready
     assert row["calibration"] == {"method": "phantomless_fat_air"}
-    assert n == 15   # the seeded rows were replaced, not duplicated
+    assert n == 16   # the seeded rows were replaced, not duplicated

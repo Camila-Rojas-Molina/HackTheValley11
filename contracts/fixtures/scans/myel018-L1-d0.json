@@ -29,7 +29,46 @@
       0.6
     ]
   },
-  "grid": null,
+  "grid": {
+    "shape": [
+      95,
+      110,
+      80
+    ],
+    "spacing_mm": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "affine": [
+      [
+        -1.0,
+        0.0,
+        0.0,
+        50.186
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0,
+        -131.024
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        -641.44
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "margin_mm": 10.0,
+    "dtype": "int16"
+  },
   "registration": {
     "status": "not_registered",
     "fixed_scan_id": null,
@@ -55,10 +94,10 @@
       "field": null,
       "basis": "measured",
       "provenance": "real_scan",
-      "status": "pending",
-      "available_in": "M3",
-      "bytes": null,
-      "sha256": null
+      "status": "ready",
+      "available_in": null,
+      "bytes": 1120634,
+      "sha256": "544fe5a2ba2413c8439bf9d8665f9ce9de26314b3b9622bddf54fd5afa1851e4"
     },
     {
       "name": "mask_vertebra.expert.nii.gz",
@@ -69,10 +108,10 @@
       "field": null,
       "basis": "measured",
       "provenance": "real_scan",
-      "status": "pending",
-      "available_in": "M3",
-      "bytes": null,
-      "sha256": null
+      "status": "ready",
+      "available_in": null,
+      "bytes": 8563,
+      "sha256": "748d247cce07218c847014d4062efae451459f52f3bc67b8a06d9d939d5cab4c"
     },
     {
       "name": "mask_lesion.expert.nii.gz",
@@ -83,10 +122,10 @@
       "field": null,
       "basis": "measured",
       "provenance": "real_scan",
-      "status": "pending",
-      "available_in": "M3",
-      "bytes": null,
-      "sha256": null
+      "status": "ready",
+      "available_in": null,
+      "bytes": 943,
+      "sha256": "18bab9992d887d882e900fe197473f6402babd1e269771c21e27bd107207174f"
     },
     {
       "name": "mask_body.expert.nii.gz",
@@ -198,18 +237,18 @@
     },
     {
       "key": "lesion_volume_cm3",
-      "value": null,
+      "value": 0.0,
       "unit": "cm3",
-      "basis": "pending",
+      "basis": "measured",
       "provenance": "real_scan",
-      "available_in": "M3",
+      "available_in": null,
       "range": null,
       "grid": "crop_1mm",
       "mask_source": "expert",
       "lesion_model": null,
       "statistic": null,
       "compared_to_scan_id": null,
-      "note": null
+      "note": "0 voxels at 1 mm"
     },
     {
       "key": "vertebra_volume_cm3",
@@ -228,11 +267,11 @@
     },
     {
       "key": "vertebra_volume_cm3",
-      "value": null,
+      "value": 69.38,
       "unit": "cm3",
-      "basis": "pending",
+      "basis": "measured",
       "provenance": "real_scan",
-      "available_in": "M3",
+      "available_in": null,
       "range": null,
       "grid": "crop_1mm",
       "mask_source": "expert",

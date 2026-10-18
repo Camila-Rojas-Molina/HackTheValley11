@@ -1,0 +1,9 @@
+# S2 (data and Bone Finder) suites. Format: scripts/test_all.py. Commands run from the repo root.
+# M3 is curation only (Galit's gate): the suite checks the committed demo/ bundle and needs nothing but pytest.
+# Checks against the sources in RB_DATA_DIR skip, with the reason, when it is not set (as in CI).
+stream = "S2"
+
+[suites.pipeline]
+what = "demo/ bundle: PROVENANCE.json hashes, NIfTI headers (1 mm; CT int16, masks uint8), L1 lesion 3,217 voxels = 3.22 cm3, mock only on the phantom"
+run = ".venv/bin/python -m pytest -q -p no:cacheprovider -rs pipeline/tests/test_demo_bundle.py"
+timeout = 600
