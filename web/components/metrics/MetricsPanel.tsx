@@ -1,128 +1,122 @@
-// The right-hand metrics panel: one tile per labels.json `tiles` entry that this scan's manifest has metrics for.
-// Every value carries its basis badge (measured, simulation, MOCK, pending (Mx)) and, for synthetic data,
-// the SIMULATED badge. Labels, units and sub-labels all come from labels.json.
+// The right-hand metrics panel: a headline card, then big-number tiles. Every value carries its basis badge
+// (measured, simulation, MOCK, pending (Mx)) and, for synthetic data, the SIMULATED badge. Titles, units and
+// sub-labels all come from labels.json.
+//
+// Each tile is an <article> whose first child is its <h3> title; `data-tile` is set only where that title is a
+// labels.json tile template (web/tests/scan.test.mjs checks it), `data-part` marks the other cards.
 import { labels } from "@/lib/labels";
-import {
-  MISSING,
-  basisBadge,
-  fill,
-  gridLabel,
-  lesionModelLabel,
-  maskLabel,
-  num,
-  provenanceBadge,
-  statisticLabel,
-  valueWithUnit,
-} from "@/lib/format";
+import { MISSING, basisBadge, fill, gridLabel, maskLabel, num, provenanceBadge, valueWithUnit } from "@/lib/format";
 import type { Metric, ScanManifest } from "@/lib/types";
 import { Badge, BasisBadge } from "./Badge";
 
-type Tile = (typeof labels.tiles)[number];
+// The tiles differ in which strings they carry (label, sub_label, value_label, ...), so read them by name.
+const tile = (key: string) => (labels.tiles.find((t) => t.key === key) ?? { key }) as unknown as Record<string, string>;
 
-function pick(ms: Metric[], key: string, mask?: string): Metric | undefined {
-  return ms.find((m) => m.key === key && (mask === undefined || m.mask_source === mask));
+function find(ms: Metric[], key: string, grid?: string): Metric | undefined {
+  return ms.find((m) => m.key === key && (grid === undefined || m.grid === grid));
 }
 
-function tileTitle(tile: Tile, ms: Metric[], level: string | null, dayA: number | null): string {
-  const t = tile as Tile & { pending_label?: string };
-  switch (tile.key) {
-    case "headline": {
-      const x = pick(ms, "stiffness_change_axial_pct", "expert");
-      const y = pick(ms, "lesion_share_pts", "expert");
-      if ((x?.value ?? null) === null && t.pending_label) {
-        return fill(t.pending_label, { level, day_a: dayA, available_in: x?.available_in ?? y?.available_in });
-      }
-      return fill(tile.label, {
-        level,
-        day_a: dayA,
-        x: num(x?.value),
-        a: num(x?.range?.low),
-        b: num(x?.range?.high),
-        y: num(y?.value),
-      });
-    }
-    case "ai_vs_expert":
-      return fill(tile.label, {
-        ai: num(pick(ms, "stiffness_change_axial_pct", "ai")?.value),
-        expert: num(pick(ms, "stiffness_change_axial_pct", "expert")?.value),
-      });
-    case "strain":
-      return fill(tile.label, { ratio: num(pick(ms, "strain_ratio")?.value), day_a: dayA });
-    default:
-      return fill(tile.label, {});
-  }
+// "3.24 cm³ (original scan grid; ...)" -> the part in brackets
+const paren = (text: string) => text.replace(/^[^(]*\(/, "").replace(/\)\s*$/, "");
+
+function Badges({ metric }: { metric?: Metric }) {
+  if (!metric) return <span />;
+  const sim = provenanceBadge(metric.provenance);
+  return (
+    <span className="flex flex-wrap justify-end gap-1">
+      <BasisBadge basis={metric.basis} text={basisBadge(metric.basis, metric.available_in)} />
+      {sim ? (
+        <Badge tone="simulated" data-provenance={metric.provenance}>
+          {sim}
+        </Badge>
+      ) : null}
+    </span>
+  );
 }
 
-function rowText(tile: Tile, m: Metric): { primary: string; qualifiers: string[] } {
-  const t = tile as Tile & { value_label?: string; alt_label?: string };
-  const value = valueWithUnit(m);
-  if (t.value_label && m.value !== null) {
-    return {
-      primary: fill(t.value_label, { value: num(m.value), grid_label: gridLabel(m.grid), mask_label: maskLabel(m.mask_source) }),
-      qualifiers: [],
-    };
-  }
-  const qualifiers = [
-    tile.key === "lesion_pct" ? (m.key === "lesion_pct_of_vertebra" ? t.alt_label : tile.label) : null,
-    gridLabel(m.grid),
-    tile.key === "ai_vs_expert" || tile.key === "headline" ? maskLabel(m.mask_source) : null,
-    lesionModelLabel(m.lesion_model),
-    statisticLabel(m.statistic),
-  ].filter((q): q is string => Boolean(q));
-  return { primary: value ?? MISSING, qualifiers };
+function Stat({
+  title, tileKey, part, metric, detail, sub, big = false,
+}: {
+  title: string; tileKey?: string; part?: string; metric?: Metric; detail?: string | null; sub?: string; big?: boolean;
+}) {
+  const value = metric ? valueWithUnit(metric) : null;
+  return (
+    <article
+      data-tile={tileKey}
+      data-part={part}
+      className="grid grid-cols-[1fr_auto] items-start gap-x-2 rounded-lg border border-border bg-card/60 p-3 text-card-foreground"
+    >
+      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+      <Badges metric={metric} />
+      <p
+        data-metric={metric?.key}
+        className={`col-span-2 mt-1 font-semibold tabular-nums ${big ? "text-3xl" : "text-2xl"} ${value ? "" : "text-muted-foreground"}`}
+      >
+        {value ?? MISSING}
+      </p>
+      {detail && value ? <p className="col-span-2 mt-0.5 text-[11px] text-muted-foreground">{detail}</p> : null}
+      {sub ? <p className="col-span-2 mt-1 text-[11px] leading-4 text-muted-foreground/80">{sub}</p> : null}
+    </article>
+  );
 }
 
 export function MetricsPanel({ manifest, dayA }: { manifest: ScanManifest; dayA: number | null }) {
-  const tiles = labels.tiles.filter(
-    (t) => !("milestone" in t && t.milestone) && (t.metrics as string[]).some((k) => manifest.metrics.some((m) => m.key === k)),
-  );
-  const shown = new Set<Metric>();
+  const m = manifest.metrics;
+  if (m.length === 0) {
+    return (
+      <section data-testid="metrics-panel" className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">{manifest.simulated ? labels.viewer.phantom_label : MISSING}</p>
+      </section>
+    );
+  }
+
+  const original = (key: string) => find(m, key, "original") ?? find(m, key);
+  const stiff = find(m, "stiffness_change_axial_pct");
+  const share = find(m, "lesion_share_pts");
+  const head = tile("headline");
+  const headline =
+    stiff?.value != null && share?.value != null
+      ? fill(head.label, {
+          level: manifest.level, day_a: dayA, x: num(stiff.value, 1), y: num(share.value, 1),
+          a: num(stiff.range?.low, 1), b: num(stiff.range?.high, 1),
+        })
+      : fill(head.pending_label, { level: manifest.level, day_a: dayA, available_in: stiff?.available_in ?? share?.available_in });
+
+  const lesion = original("lesion_volume_cm3");
+  const vert = original("vertebra_volume_cm3");
+  const lesionTile = tile("lesion_volume");
+  const lesionDetail = lesion?.value != null
+    ? paren(fill(lesionTile.value_label, { value: "", grid_label: gridLabel(lesion.grid), mask_label: maskLabel(lesion.mask_source) }))
+    : null;
+
   return (
     <section data-testid="metrics-panel" className="flex flex-col gap-3">
-      {tiles.length ? (
-        <p className="text-xs text-muted-foreground">{labels.headline_statement}</p>
-      ) : (
-        <p className="text-sm text-muted-foreground">{manifest.simulated ? labels.viewer.phantom_label : MISSING}</p>
-      )}
-      {tiles.map((tile) => {
-        const ms = manifest.metrics.filter((m) => (tile.metrics as string[]).includes(m.key) && !shown.has(m));
-        // the AI-vs-expert tile reuses the headline's stiffness metric; every other metric shows once
-        if (tile.key !== "headline") ms.forEach((m) => shown.add(m));
-        const rows = tile.key === "headline" ? ms.filter((m) => m.mask_source !== "ai") : ms;
-        return (
-          <article
-            key={tile.key}
-            data-tile={tile.key}
-            className="rounded-md border border-border bg-card p-3 text-card-foreground shadow-xs"
-          >
-            <h3 className="text-sm font-semibold leading-snug">{tileTitle(tile, manifest.metrics, manifest.level, dayA)}</h3>
-            <ul className="mt-2 flex flex-col gap-1.5">
-              {rows.map((m, i) => {
-                const { primary, qualifiers } = rowText(tile, m);
-                const sim = provenanceBadge(m.provenance);
-                return (
-                  <li key={`${m.key}-${i}`} data-metric={m.key} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                    <span className="font-medium tabular-nums">{primary}</span>
-                    {qualifiers.length ? (
-                      <span className="text-xs text-muted-foreground">{qualifiers.join(" · ")}</span>
-                    ) : null}
-                    <BasisBadge basis={m.basis} text={basisBadge(m.basis, m.available_in)} />
-                    {sim ? (
-                      <Badge tone="simulated" data-provenance={m.provenance}>
-                        {sim}
-                      </Badge>
-                    ) : null}
-                    {m.note ? <span className="w-full text-xs text-muted-foreground">{m.note}</span> : null}
-                  </li>
-                );
-              })}
-            </ul>
-            {"sub_label" in tile && tile.sub_label ? (
-              <p className="mt-2 text-xs text-muted-foreground">{tile.sub_label}</p>
-            ) : null}
-          </article>
-        );
-      })}
+      <article
+        data-tile="headline"
+        className="grid grid-cols-[1fr_auto] items-start gap-x-2 rounded-lg border border-border bg-gradient-to-br from-card to-card/40 p-3.5 text-card-foreground"
+      >
+        <h3 className="text-sm font-medium leading-5">{headline}</h3>
+        <Badges metric={stiff} />
+        <p className="col-span-2 mt-2 text-[11px] leading-4 text-muted-foreground">{head.sub_label}</p>
+      </article>
+
+      <Stat tileKey="lesion_volume" title={lesionTile.label} metric={lesion} detail={lesionDetail} sub={lesionTile.sub_label} big />
+
+      <div className="grid grid-cols-2 gap-3">
+        <Stat tileKey="vertebra_volume" title={tile("vertebra_volume").label} metric={vert} detail={gridLabel(vert?.grid)} />
+        <Stat part="lesion_pct_of_vertebra" title={tile("lesion_pct").alt_label} metric={find(m, "lesion_pct_of_vertebra")} />
+        <Stat tileKey="lesion_pct" title={tile("lesion_pct").label} metric={find(m, "lesion_pct_of_body")} />
+        <Stat
+          part="strain_ratio"
+          title={tile("strain").label.split(":")[0]}
+          metric={find(m, "strain_ratio")}
+          sub={tile("strain").sub_label}
+        />
+      </div>
+
+      <Stat tileKey="background" title={tile("background").label} metric={find(m, "background_change_pct")} sub={tile("background").sub_label} />
+      <Stat tileKey="modulus" title={tile("modulus").label} metric={find(m, "modulus_lesion_gpa")} sub={tile("modulus").sub_label} />
+      <Stat tileKey="vonmises" title={tile("vonmises").label} metric={find(m, "vonmises_p99_mpa")} sub={tile("vonmises").sub_label} />
     </section>
   );
 }

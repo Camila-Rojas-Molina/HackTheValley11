@@ -1,7 +1,8 @@
 "use client";
 // NiiVue 0.69.0 (viewer.md): CT in a bone window, the masks as label overlays, and the strain volume as a Turbo
-// overlay on a fixed scale from the manifest, in a 2x2 view (axial, coronal, sagittal, 3D). The 3D pane is cut
-// open with a clip plane that also clips the overlays, so the strain inside the bone shows on the cut face.
+// overlay on a fixed scale from the manifest. The default is one draggable 3D bone (drag to rotate, scroll to
+// zoom); "Slices" switches to the 2x2 view (axial, coronal, sagittal, 3D). "Cut-away" slices the 3D bone open at
+// its centre, facing the camera, with a clip plane that also clips the overlays, so the strain inside shows.
 // Loaded only through ./index.tsx (next/dynamic, ssr:false).
 import { useEffect, useRef, useState } from "react";
 import { Niivue, SLICE_TYPE } from "@niivue/niivue";
@@ -12,7 +13,7 @@ type NVMeshLayerKey = Parameters<Niivue["setMeshLayerProperty"]>[2];
 
 // The clip plane faces the camera (same azimuth/elevation), through the centre of the volume (depth 0), so the
 // near half is cut away; its colour is transparent so only the cut face shows. Tuned on the phantom and Day 273.
-const CLIP_PLANE = [0, 340, 20];
+const NO_CLIP = [2, 0, 0]; // NiiVue: a depth above 1 turns the clip plane off
 const RENDER_AZIMUTH_ELEVATION: [number, number] = [340, 20];
 const FOCUS_FRACTION = 0.8; // strain focus: voxels at or above 80% of the volume's maximum
 
@@ -51,6 +52,11 @@ export default function ScanViewer({ scanId, layers, strain, pending, height }: 
   const meshId = useRef<string | null>(null);
   const [status, setStatus] = useState<string>(pending ? "pending" : "loading");
   const [surface, setSurface] = useState(false);
+  const [view, setView] = useState<"3d" | "slices">("3d");
+  // A lesion sits inside the vertebra, so a scan with a lesion mask starts cut open (3D view only).
+  const hasLesion = layers.some((l) => l.kind === "mask_lesion");
+  const [cut, setCut] = useState(hasLesion);
+  const cutRef = useRef(hasLesion);
   const layerKey = JSON.stringify(layers);
   const hasStrain = strain !== null;
 
@@ -84,11 +90,12 @@ export default function ScanViewer({ scanId, layers, strain, pending, height }: 
         (lesion >= 0 ? centroidMM(nv.volumes[lesion] as NVImageLike, () => 0.5) : null) ??
         (hot >= 0 ? centroidMM(nv.volumes[hot] as NVImageLike, (max) => FOCUS_FRACTION * max) : null);
       if (focus) nv.scene.crosshairPos = nv.mm2frac(focus);
-      nv.setSliceType(SLICE_TYPE.MULTIPLANAR);
       nv.setMultiplanarLayout(2); // 2x2: axial, coronal, sagittal + 3D render
       nv.setRenderAzimuthElevation(...RENDER_AZIMUTH_ELEVATION);
       nv.setClipPlaneColor([0, 0, 0, 0]);
-      nv.setClipPlane(CLIP_PLANE);
+      nv.setSliceType(SLICE_TYPE.RENDER);
+      aimCut(nv);
+      nv.onMouseUp = () => cutRef.current && aimCut(nv); // the cut keeps facing the camera after a drag
       nv.updateGLVolume();
       const ms = Math.round(performance.now() - t0);
       wrap.current?.setAttribute("data-ms", String(ms));
@@ -107,6 +114,25 @@ export default function ScanViewer({ scanId, layers, strain, pending, height }: 
       nv.cleanup();
     };
   }, [scanId, layerKey, pending, hasStrain]);
+
+  function aimCut(nv: Niivue) {
+    nv.setClipPlane(cutRef.current ? [0, nv.scene.renderAzimuth, nv.scene.renderElevation] : NO_CLIP);
+  }
+
+  // One draggable 3D bone by default; "Slices" is the 2x2 view. The 3D crosshair only helps in the slice view.
+  useEffect(() => {
+    const nv = nvRef.current;
+    if (!nv || status !== "ready") return;
+    nv.opts.show3Dcrosshair = view === "slices";
+    nv.setSliceType(view === "3d" ? SLICE_TYPE.RENDER : SLICE_TYPE.MULTIPLANAR);
+    nv.updateGLVolume();
+  }, [view, status]);
+
+  function toggleCut(on: boolean) {
+    setCut(on);
+    cutRef.current = on;
+    if (nvRef.current) aimCut(nvRef.current);
+  }
 
   async function toggleSurface(on: boolean) {
     setSurface(on);
@@ -145,6 +171,31 @@ export default function ScanViewer({ scanId, layers, strain, pending, height }: 
           <p className="pointer-events-none absolute left-3 top-3 text-xs text-slate-300">…</p>
         ) : null}
       </div>
+      {status === "ready" ? (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
+          <span role="group" aria-label="View" className="flex overflow-hidden rounded-md border border-border">
+            {(["3d", "slices"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={view === v}
+                onClick={() => setView(v)}
+                className={`px-2.5 py-1 ${view === v ? "bg-foreground text-background" : "hover:text-foreground"}`}
+              >
+                {v === "3d" ? "3D" : "Slices"}
+              </button>
+            ))}
+          </span>
+          {view === "3d" ? (
+            <>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={cut} onChange={(e) => toggleCut(e.target.checked)} /> Cut-away
+              </label>
+              <span>Drag to rotate · scroll to zoom</span>
+            </>
+          ) : null}
+        </div>
+      ) : null}
       {strain?.meshUrl && status === "ready" ? (
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={surface} onChange={(e) => void toggleSurface(e.target.checked)} />

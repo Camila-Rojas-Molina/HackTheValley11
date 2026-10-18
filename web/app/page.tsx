@@ -6,6 +6,7 @@ const SCANS = [
   { id: "myel018-L1-d273", text: labels.viewer.demo_case_label },
   { id: "phantom", text: labels.viewer.phantom_label },
 ];
+const FEMUR_TEXT = `Femur · ${labels.viewer.phantom_label}`;
 
 export default function Home() {
   return (
@@ -20,6 +21,11 @@ export default function Home() {
             </Link>
           </li>
         ))}
+        <li>
+          <Link href="/femur" className="text-sm font-medium underline underline-offset-4">
+            {FEMUR_TEXT}
+          </Link>
+        </li>
       </ul>
     </main>
   );

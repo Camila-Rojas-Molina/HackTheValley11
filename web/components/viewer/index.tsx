@@ -8,4 +8,9 @@ export const ScanViewer = dynamic(() => import("./ScanViewer"), {
   loading: () => <div className="h-[440px] w-full rounded-md border border-border bg-[#0a0d14]" data-status="loading" />,
 });
 
+export const FemurViewer = dynamic(() => import("./FemurViewer"), {
+  ssr: false,
+  loading: () => <div className="h-[560px] w-full rounded-md border border-border bg-[#0a0d14]" data-status="loading" />,
+});
+
 export type { ScanViewerProps, ViewerLayer, ViewerStrain } from "./types";
